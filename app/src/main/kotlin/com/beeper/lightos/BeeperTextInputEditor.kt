@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,6 +19,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -32,6 +34,7 @@ import com.thelightphone.lp3Keyboard.ui.*
 import com.thelightphone.sdk.ui.*
 import com.thelightphone.sdk.ui.keyboard.LightEmbeddedLp3Keyboard
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.math.roundToInt
 
 private const val INPUT_UNDERLINE_THICKNESS_PX = 3f
 private const val INPUT_UNDERLINE_GAP_GRID_UNITS = 0.5f
@@ -78,9 +81,23 @@ fun BeeperTextInputEditor(
 
     val colors = LightThemeTokens.colors
     val t = LightThemeTokens.typography
-    val inputStyle = t.heading.copy(color = colors.content)
+    val inputStyle = t.fine.copy(color = colors.content)
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val scrollState = rememberScrollState()
+
+    LaunchedEffect(state.text.toString(), textLayout, scrollState.maxValue) {
+        textLayout?.let { layout ->
+            if (scrollState.viewportSize > 0) {
+                val cursorPos = state.selection.min.coerceIn(0, layout.layoutInput.text.length)
+                val rect = layout.getCursorRect(cursorPos)
+                val cursorCenterY = (rect.top + rect.bottom) / 2f
+                val targetScroll = (cursorCenterY - (scrollState.viewportSize / 2f)).roundToInt().coerceIn(0, scrollState.maxValue)
+                if (scrollState.value != targetScroll) {
+                    scrollState.scrollTo(targetScroll)
+                }
+            }
+        }
+    }
 
     Surface {
         Column(modifier = modifier.fillMaxSize()) {
@@ -107,13 +124,15 @@ fun BeeperTextInputEditor(
                             val down = awaitFirstDown(requireUnconsumed = false)
                             textLayout?.let { layout ->
                                 state.edit {
-                                    selection = TextRange(layout.getOffsetForPosition(down.position))
+                                    val pos = Offset(down.position.x, down.position.y + scrollState.value)
+                                    selection = TextRange(layout.getOffsetForPosition(pos))
                                 }
                             }
                             drag(down.id) { change ->
                                 textLayout?.let { layout ->
                                     state.edit {
-                                        selection = TextRange(layout.getOffsetForPosition(change.position))
+                                        val pos = Offset(change.position.x, change.position.y + scrollState.value)
+                                        selection = TextRange(layout.getOffsetForPosition(pos))
                                     }
                                 }
                                 change.consume()
@@ -146,6 +165,11 @@ fun BeeperTextInputEditor(
                                 .fillMaxWidth()
                                 .height(INPUT_UNDERLINE_THICKNESS_PX.designVerticalPxToDp())
                                 .background(colors.content),
+                        )
+                        Spacer(
+                            modifier = Modifier.height(
+                                with(LocalDensity.current) { (scrollState.viewportSize / 2).coerceAtLeast(0).toDp() }
+                            )
                         )
                     }
                 }

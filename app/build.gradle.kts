@@ -13,7 +13,7 @@ android {
     defaultConfig {
         minSdk = 33
         targetSdk = 36
-        manifestPlaceholders["sdkVersion"] = "0.0.3"
+        manifestPlaceholders["sdkVersion"] = "0.0.4"
     }
 
     buildFeatures {

@@ -1,4 +1,4 @@
-# Beeper4LightOS
+# LightBeeper
 
 > [!WARNING]
 > **IMPORTANT LOGIN INSTRUCTIONS**: Do **NOT** use the interactive verification process to verify your session, as it is currently unstable. Please use a **Recovery Code** instead to log in successfully.
@@ -12,14 +12,16 @@
 - **Voice Typing:** Currently does not work.
 - **New Message Indicator:** The UI currently lacks a visual indicator for new/unread messages.
 
-Beeper4LightOS is an unofficial, open-source matrix client application tailored for the LightOS environment. It is designed to work with Beeper's infrastructure to provide unified messaging on LightOS devices. 
+LightBeeper is an unofficial, open-source matrix client application tailored for the LightOS environment. It is designed to work with Beeper's infrastructure to provide unified messaging on LightOS devices. 
 
 ## Features
 - Connects to your Beeper/Matrix account seamlessly using your Beeper credentials.
-- Supports viewing and navigating your Beeper chat list.
+- Supports viewing and navigating your Beeper chat list with a clean "☰" hamburger menu.
 - Supports reading text messages, image attachments, and replies.
+- Custom message drafting area optimized for compact screens with automatic typing line centering, comfortable `t.fine` text sizing, and full visual scroll bar support.
+- Ergonomic keyboard spacing and clean version number display.
 - Provides robust offline support (message queuing and retry on failure).
-- Uses the Trixnity Matrix client SDK for robust communication with Matrix servers.
+- Uses the Trixnity Matrix client SDK for reliable communication with Matrix servers.
 
 ## Prerequisites
 - Android Studio or IntelliJ IDEA with the Android plugin.
@@ -29,7 +31,7 @@ Beeper4LightOS is an unofficial, open-source matrix client application tailored 
 ## Getting Started
 
 1. **Clone the repositories:**
-   Since Beeper4LightOS depends on the Light SDK, you must clone both repositories into the same parent directory:
+   Since LightBeeper depends on the Light SDK, you must clone both repositories into the same parent directory:
    ```bash
    git clone https://github.com/lightphone/light-sdk.git
    git clone https://github.com/ironfeet/Beeper4LightOS.git
@@ -58,6 +60,7 @@ Beeper4LightOS is an unofficial, open-source matrix client application tailored 
    ```bash
    ./gradlew app:installDebug
    ```
+   *(Tip: To test with full LightOS system permissions (`uid 1000`) on Linux or macOS, follow the emulator system app setup instructions in `light-sdk/docs/system_app/README.md` using an AOSP `default` system image built with `test-keys`).*
 
 ## Architecture
 The application uses Kotlin and Jetpack Compose, built atop the Light Phone SDK.
