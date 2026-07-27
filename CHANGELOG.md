@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.3] - 2026-07-23
+## [0.0.4] - 2026-07-27
+
+### Added
+- **Typing Line Centering:** When drafting multi-line messages, the view automatically scrolls to keep your active typing line centered in the visible screen area for better ergonomics and context.
+- **Trailing Scroll Room:** Added bottom spacing in the message composer so even the very last line of a long message can reach the middle of the screen.
+
+### Changed
+- **Composer Font Size:** Reduced character font size in the message composer to `t.fine` (25sp), making text drafting much cleaner and more comfortable on compact screens.
+- **Selection Behavior:** Selecting or tapping text to position the cursor no longer triggers automatic centering, preventing unexpected view jumps when editing or reviewing drafted messages.
+
+### Fixed
+- **Scrolled Cursor Positioning:** Fixed a bug where tapping a line in a scrolled textbox placed the cursor one or more lines above where you touched. Touch coordinates are now properly offset by the scroll state.
+
+## [0.0.3] - 2026-07-27
 
 ### Added
 - Added a visual scroll bar when drafting long messages so you can easily see your place.

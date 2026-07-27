@@ -44,3 +44,4 @@ Test*.kt
 /*.sh
 /*.png
 scripts/node_modules/
+start_emulator.sh

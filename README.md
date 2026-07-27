@@ -18,9 +18,10 @@ LightBeeper is an unofficial, open-source matrix client application tailored for
 - Connects to your Beeper/Matrix account seamlessly using your Beeper credentials.
 - Supports viewing and navigating your Beeper chat list with a clean "☰" hamburger menu.
 - Supports reading text messages, image attachments, and replies.
-- Custom message drafting area optimized for small screens with full scrolling support.
+- Custom message drafting area optimized for compact screens with automatic typing line centering, comfortable `t.fine` text sizing, and full visual scroll bar support.
+- Ergonomic keyboard spacing and clean version number display.
 - Provides robust offline support (message queuing and retry on failure).
-- Uses the Trixnity Matrix client SDK for robust communication with Matrix servers.
+- Uses the Trixnity Matrix client SDK for reliable communication with Matrix servers.
 
 ## Prerequisites
 - Android Studio or IntelliJ IDEA with the Android plugin.
@@ -59,6 +60,7 @@ LightBeeper is an unofficial, open-source matrix client application tailored for
    ```bash
    ./gradlew app:installDebug
    ```
+   *(Tip: To test with full LightOS system permissions (`uid 1000`) on Linux or macOS, follow the emulator system app setup instructions in `light-sdk/docs/system_app/README.md` using an AOSP `default` system image built with `test-keys`).*
 
 ## Architecture
 The application uses Kotlin and Jetpack Compose, built atop the Light Phone SDK.

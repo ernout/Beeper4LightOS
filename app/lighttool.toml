@@ -1,8 +1,8 @@
 [tool]
 id          = "me.ironfeet.beeper4lightos"
 label       = "LightBeeper"
-versionCode = 3
-versionName = "0.0.3"
+versionCode = 4
+versionName = "0.0.4"
 packageName = "me.ironfeet.beeper4lightos"
 serverPackage = "me.ironfeet"
 permissions = ["android.permission.INTERNET", "android.permission.POST_NOTIFICATIONS", "android.permission.CAMERA", "android.permission.RECORD_AUDIO"]
