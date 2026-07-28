@@ -277,7 +277,7 @@ object BeeperRepository {
             val user = whoami["user"]?.jsonObject ?: throw Exception("Missing user in response")
             val userInfo = whoami["userInfo"]?.jsonObject ?: throw Exception("Missing userInfo in response")
             val username = userInfo["username"]?.jsonPrimitive?.content ?: throw Exception("Missing username")
-            val asmuxData = user["asmuxData"]?.jsonObject ?: throw Exception("Missing asmuxData in response")
+            user["asmuxData"]?.jsonObject ?: throw Exception("Missing asmuxData in response")
             val loginToken = json["token"]?.jsonPrimitive?.content ?: throw Exception("Missing root token")
 
             // Now perform custom JWT matrix login for Beeper
