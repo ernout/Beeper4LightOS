@@ -8,6 +8,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import io.ktor.util.decodeBase64Bytes
+import net.folivo.trixnity.client.user
+import net.folivo.trixnity.client.user.getAccountData
+import net.folivo.trixnity.crypto.core.encryptAes256Ctr
+import net.folivo.trixnity.utils.encodeUnpaddedBase64
+import net.folivo.trixnity.utils.toByteArray
+import net.folivo.trixnity.utils.toByteArrayFlow
 import net.folivo.trixnity.client.MatrixClient
 import net.folivo.trixnity.client.key
 import net.folivo.trixnity.client.verification
@@ -76,6 +83,12 @@ class BeeperVerificationViewModel : LightViewModel<Unit>() {
                         val result = recoveryKeyMethod.verify(code)
                         if (result.isFailure) {
                             android.util.Log.e("BeeperVerification", "Recovery Key verify failed", result.exceptionOrNull())
+                            // Trixnity masks bit 63 of the stored IV before computing the
+                            // check MAC (only correct when *generating* an IV). If the key
+                            // creator stored an IV with that bit set, the standard check can
+                            // never succeed. Re-check with the IV used verbatim and finish
+                            // verification manually when it matches.
+                            tryUnmaskedIvVerification(code)
                         } else {
                             android.util.Log.d("BeeperVerification", "Recovery Key verify succeeded!")
                             
@@ -99,6 +112,73 @@ class BeeperVerificationViewModel : LightViewModel<Unit>() {
             } catch (e: Exception) {
                 android.util.Log.e("BeeperVerification", "Failed to verify with recovery key", e)
             }
+        }
+    }
+
+    private suspend fun tryUnmaskedIvVerification(code: String) {
+        val tag = "BeeperVerification"
+        try {
+            val defaultKeyContent = client.user
+                .getAccountData<net.folivo.trixnity.core.model.events.m.secretstorage.DefaultSecretKeyEventContent>()
+                .first()
+            if (defaultKeyContent == null) {
+                android.util.Log.e(tag, "Fallback: account has no default secret storage key")
+                return
+            }
+            val keyId = defaultKeyContent.key
+            val keyInfo = client.user
+                .getAccountData<net.folivo.trixnity.core.model.events.m.secretstorage.SecretKeyEventContent>(key = keyId)
+                .first()
+            val aesInfo = keyInfo as? net.folivo.trixnity.core.model.events.m.secretstorage.SecretKeyEventContent.AesHmacSha2Key
+            if (aesInfo == null) {
+                android.util.Log.e(tag, "Fallback: default key is not AesHmacSha2 but $keyInfo")
+                return
+            }
+            android.util.Log.d(
+                tag,
+                "Fallback: keyId=$keyId hasPassphrase=${aesInfo.passphrase != null} iv=${aesInfo.iv} mac=${aesInfo.mac}"
+            )
+            val storedIv = aesInfo.iv?.decodeBase64Bytes()
+            val storedMac = aesInfo.mac
+            if (storedIv == null || storedMac == null) {
+                android.util.Log.e(tag, "Fallback: stored iv or mac missing")
+                return
+            }
+            val key = net.folivo.trixnity.crypto.key.decodeRecoveryKey(code)
+            val keys = net.folivo.trixnity.crypto.core.deriveKeys(key, "")
+
+            val rawIvCiphertext = ByteArray(32).toByteArrayFlow()
+                .encryptAes256Ctr(key = keys.aesKey, initialisationVector = storedIv)
+                .toByteArray()
+            val rawIvMac = net.folivo.trixnity.crypto.core.hmacSha256(keys.hmacKey, rawIvCiphertext)
+                .encodeUnpaddedBase64()
+
+            val highBitSet = (storedIv[8].toInt() and 0x80) != 0
+            android.util.Log.d(
+                tag,
+                "Fallback: ivByte8HighBitSet=$highBitSet storedMac=$storedMac rawIvMac=$rawIvMac"
+            )
+
+            fun norm(s: String) = s.replace("=", "")
+            if (norm(rawIvMac) == norm(storedMac)) {
+                android.util.Log.d(tag, "Fallback: MAC matches with unmasked IV — completing verification manually")
+                client.di.get<net.folivo.trixnity.client.key.KeySecretService>()
+                    .decryptOrCreateMissingSecrets(key, keyId, aesInfo)
+                val trustResult = client.di.get<net.folivo.trixnity.client.key.KeyTrustService>()
+                    .checkOwnAdvertisedMasterKeyAndVerifySelf(key, keyId, aesInfo)
+                if (trustResult.isFailure) {
+                    android.util.Log.e(tag, "Fallback: trust step failed", trustResult.exceptionOrNull())
+                } else {
+                    android.util.Log.d(tag, "Fallback verification succeeded!")
+                }
+            } else {
+                android.util.Log.e(
+                    tag,
+                    "Fallback: MAC does not match with unmasked IV either — the code does not belong to this account's key"
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(tag, "Fallback verification threw", e)
         }
     }
 

@@ -224,13 +224,24 @@ class BeeperVerificationScreen(
                     } else {
                         BeeperButton(
                             text = "Enter Security Code to Unlock Messages",
-                            onClick = { isEnteringCode = true }
+                            onClick = {
+                                // Debug convenience: prefill from a file pushed via
+                                // `adb shell run-as <pkg> sh -c 'cat > files/security_code.txt'`
+                                val codeFile = BeeperRepository.appContext
+                                    ?.let { java.io.File(it.filesDir, "security_code.txt") }
+                                if (codeFile != null && codeFile.exists()) {
+                                    securityCode = codeFile.readText().trim()
+                                    codeFile.delete()
+                                }
+                                isEnteringCode = true
+                            }
                         )
                         Spacer(modifier = Modifier.height(0.5f.gridUnitsAsDp()))
                         if (!isVerified) {
-                            BeeperButton(
-                                text = "Request Interactive Verification",
-                                onClick = { viewModel.requestVerification() }
+                            LightText(
+                                text = "Interactive verification is not supported. Use your Beeper Recovery Code.",
+                                variant = LightTextVariant.Fine,
+                                lighten = true,
                             )
                         }
                     }
