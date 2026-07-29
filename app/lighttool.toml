@@ -1,6 +1,6 @@
 [tool]
 id          = "me.ironfeet.beeper4lightos"
-label       = "LightBeeper"
+label       = "Chat"
 versionCode = 4
 versionName = "0.0.4"
 packageName = "me.ironfeet.beeper4lightos"
