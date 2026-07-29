@@ -57,6 +57,7 @@ data class RoomSummary(
     val lastMessage: String,
     val unreadCount: Long,
     val lastTimestamp: Long,
+    val isFavorite: Boolean = false,
 )
 
 /** Format a millisecond timestamp for display in the chat list. */
@@ -194,6 +195,47 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
     private val _isVerified = MutableStateFlow(true)
     val isVerified: StateFlow<Boolean> = _isVerified.asStateFlow()
 
+    private val prefs
+        get() = BeeperRepository.appContext?.getSharedPreferences(
+            "beeper_prefs", android.content.Context.MODE_PRIVATE
+        )
+
+    private val _showOnlyFavorites =
+        MutableStateFlow(prefs?.getBoolean("show_only_favorites", true) ?: true)
+    val showOnlyFavorites: StateFlow<Boolean> = _showOnlyFavorites.asStateFlow()
+
+    private val latestRooms        = java.util.concurrent.ConcurrentHashMap<String, net.folivo.trixnity.client.store.Room>()
+    private val latestRoomNames    = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val latestLastMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val latestFavorites    = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    fun toggleFavoritesFilter() {
+        val newValue = !_showOnlyFavorites.value
+        _showOnlyFavorites.value = newValue
+        prefs?.edit()?.putBoolean("show_only_favorites", newValue)?.apply()
+        rebuildRooms()
+    }
+
+    private fun rebuildRooms() {
+        val sortedRooms = latestRooms.values
+            .filter { it.lastRelevantEventTimestamp != null }
+            .filter { !_showOnlyFavorites.value || latestFavorites[it.roomId.full] == true }
+            .sortedByDescending { it.lastRelevantEventTimestamp }
+            .take(20)
+
+        _rooms.value = sortedRooms.map { r ->
+            RoomSummary(
+                roomId      = r.roomId.full,
+                displayName = latestRoomNames[r.roomId.full] ?: "Chat",
+                lastMessage = latestLastMessages[r.roomId.full] ?: "",
+                unreadCount = r.unreadMessageCount,
+                lastTimestamp = r.lastRelevantEventTimestamp
+                    ?.toEpochMilliseconds() ?: 0L,
+                isFavorite  = latestFavorites[r.roomId.full] == true,
+            )
+        }
+    }
+
     init {
         val client = BeeperRepository.getClient()
         if (client != null) {
@@ -204,10 +246,8 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                 }
             }
             viewModelScope.launch(Dispatchers.IO) {
-                val latestRooms        = java.util.concurrent.ConcurrentHashMap<String, net.folivo.trixnity.client.store.Room>()
-                val latestRoomNames    = java.util.concurrent.ConcurrentHashMap<String, String>()
-                val latestLastMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
-                val jobs               = mutableMapOf<String, kotlinx.coroutines.Job>()
+                val jobs    = mutableMapOf<String, kotlinx.coroutines.Job>()
+                val tagJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
 
                 client.room.getAll().collect { roomFlowsMap ->
                     val currentRoomIds = roomFlowsMap.keys.map { it.full }.toSet()
@@ -219,9 +259,11 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                         val entry = it.next()
                         if (entry.key !in currentRoomIds) {
                             entry.value.cancel()
+                            tagJobs.remove(entry.key)?.cancel()
                             latestRooms.remove(entry.key)
                             latestRoomNames.remove(entry.key)
                             latestLastMessages.remove(entry.key)
+                            latestFavorites.remove(entry.key)
                             it.remove()
                         }
                     }
@@ -229,6 +271,21 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                     // Launch collector for each new room
                     roomFlowsMap.forEach { (roomId, roomFlow) ->
                         val id = roomId.full
+                        // Track the m.favourite tag (room account data) per room
+                        if (tagJobs[id] == null) {
+                            tagJobs[id] = launch {
+                                client.room.getAccountData(
+                                    roomId,
+                                    net.folivo.trixnity.core.model.events.m.TagEventContent::class,
+                                ).collect { tagContent ->
+                                    val fav = tagContent?.tags?.containsKey(
+                                        net.folivo.trixnity.core.model.events.m.TagEventContent.TagName.Favourite
+                                    ) == true
+                                    val previous = latestFavorites.put(id, fav)
+                                    if (previous != fav) rebuildRooms()
+                                }
+                            }
+                        }
                         if (jobs[id] == null) {
                             jobs[id] = launch {
                                 roomFlow.flatMapLatest { room ->
@@ -318,23 +375,8 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                         }
                                         latestRooms[id]        = room
                                         latestRoomNames[id]    = computedName
-                                        
-                                        // Rebuild sorted list
-                                        val sortedRooms = latestRooms.values
-                                            .filter { it.lastRelevantEventTimestamp != null }
-                                            .sortedByDescending { it.lastRelevantEventTimestamp }
-                                            .take(20)
 
-                                        _rooms.value = sortedRooms.map { r ->
-                                            RoomSummary(
-                                                roomId      = r.roomId.full,
-                                                displayName = latestRoomNames[r.roomId.full] ?: "Chat",
-                                                lastMessage = latestLastMessages[r.roomId.full] ?: "",
-                                                unreadCount = r.unreadMessageCount,
-                                                lastTimestamp = r.lastRelevantEventTimestamp
-                                                    ?.toEpochMilliseconds() ?: 0L,
-                                            )
-                                        }
+                                        rebuildRooms()
                                     }
                                 }
                             }
@@ -365,6 +407,7 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
         val themeColors by LightThemeController.colors.collectAsState()
         val rooms       by viewModel.rooms.collectAsState()
         val isVerified  by viewModel.isVerified.collectAsState()
+        val showOnlyFavorites by viewModel.showOnlyFavorites.collectAsState()
 
         var showLogoutConfirmation by remember { mutableStateOf(false) }
         var showMenu by remember { mutableStateOf(false) }
@@ -387,8 +430,11 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
                     leftButton  = LightBarButton.Text("☰", onClick = {
                         showMenu = true
                     }),
-                    center      = LightTopBarCenter.Text("Chats"),
-                    rightButton = null,
+                    center      = LightTopBarCenter.Text(if (showOnlyFavorites) "Favorites" else "Chats"),
+                    rightButton = LightBarButton.Text(
+                        if (showOnlyFavorites) "All" else "Favs",
+                        onClick = { viewModel.toggleFavoritesFilter() },
+                    ),
                 )
 
                 // Key Backup debug logging (kept from original)
@@ -430,6 +476,17 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
                         .fillMaxWidth()
                         .padding(start = 1f.gridUnitsAsDp()),
                 ) {
+                    if (rooms.isEmpty() && showOnlyFavorites) {
+                        LightText(
+                            text     = "No favorite chats yet. Mark chats as favorite in Beeper, or tap \"All\" to show every chat.",
+                            variant  = LightTextVariant.Fine,
+                            lighten  = true,
+                            modifier = Modifier.padding(
+                                top = 1f.gridUnitsAsDp(),
+                                end = 1f.gridUnitsAsDp(),
+                            ),
+                        )
+                    }
                     rooms.forEachIndexed { index, room ->
                         Column(
                             modifier = Modifier
