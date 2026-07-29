@@ -37,6 +37,20 @@ LightBeeper is an unofficial, open-source matrix client application tailored for
    git clone https://github.com/ironfeet/Beeper4LightOS.git
    ```
 
+   This app targets Light SDK **0.0.11**; newer light-sdk revisions ship a
+   changed lp3keyboard API and stricter plugin checks that currently break the
+   build. Pin the SDK checkout accordingly:
+   ```bash
+   cd light-sdk && git checkout -b beeper4lightos-pin 0866754
+   ```
+   Then add the extra dependencies this app needs to `ALLOWED_DEPENDENCIES` in
+   `light-sdk/plugin/src/main/kotlin/com/thelightphone/plugin/LightSdkPlugin.kt`:
+   `"net.folivo"`, `"io.github.oshai:kotlin-logging"`, `"io.insert-koin"` and
+   `"com.thelightphone"`. Building also requires JDK 21 (Android Studio's
+   bundled JBR works: `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`)
+   and a GitHub token with `read:packages` scope exported as
+   `GH_PACKAGES_USER`/`GH_PACKAGES_TOKEN` for the lp3keyboard package.
+
 2. **Configure Local Properties:**
    Ensure your `local.properties` file in the `Beeper4LightOS` root directory contains the path to your Android SDK:
    ```properties
