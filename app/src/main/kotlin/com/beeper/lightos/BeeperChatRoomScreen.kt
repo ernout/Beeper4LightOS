@@ -1048,7 +1048,10 @@ class BeeperChatRoomScreen(
                             onClick = { goBack(null) },
                         ),
                         center      = LightTopBarCenter.Text(roomName),
-                        rightButton = null,
+                        rightButton = LightBarButton.LightIcon(
+                            icon    = LightIcons.CAMERA,
+                            onClick = { navigateTo(screenFactory = { BeeperCameraScreen(it, roomId) }) },
+                        ),
                         modifier    = Modifier.padding(bottom = 1f.gridUnitsAsDp()),
                     )
 
