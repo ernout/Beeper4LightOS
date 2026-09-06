@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Same splash theme the SDK declares, plus an icon. The SDK's version leaves
+      windowSplashScreenAnimatedIcon unset, so a cold start shows the system's
+      default app icon on black.
+    -->
+    <style name="LightSdk.Theme.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@android:color/black</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="postSplashScreenTheme">@style/LightSdk.Theme</item>
+    </style>
+</resources>
