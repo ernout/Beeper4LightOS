@@ -137,21 +137,26 @@ object BeeperRepository {
         if (isInitialized) return
         appContext = androidContext.applicationContext
         isInitialized = true
-        
-        val client = getOrInitMatrixClient(androidContext)
-        if (client != null) {
-            client.startSync()
-            _isLoggedIn.value = true
-            
-            pendingPushEndpoint?.let { endpoint ->
-                registerPushEndpoint(endpoint)
+
+        // Opening the store touches disk; keep it off the frame the UI is drawing on.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val client = getOrInitMatrixClient(androidContext)
+            if (client != null) {
+                // Announce the restored session first: the chat list can render from the
+                // store (and from its own cache) while the first sync is still in flight.
+                _isLoggedIn.value = true
+                client.startSync()
+
+                pendingPushEndpoint?.let { endpoint ->
+                    registerPushEndpoint(endpoint)
+                }
+
+                com.thelightphone.sdk.LightWork.enqueuePeriodic(
+                    com.thelightphone.sdk.SealedLightContext(androidContext),
+                    "beeper-sync",
+                    kotlin.time.Duration.parse("15m")
+                )
             }
-            
-            com.thelightphone.sdk.LightWork.enqueuePeriodic(
-                com.thelightphone.sdk.SealedLightContext(androidContext),
-                "beeper-sync",
-                kotlin.time.Duration.parse("15m")
-            )
         }
     }
 

@@ -51,6 +51,7 @@ import net.folivo.trixnity.client.key
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
 import java.util.Calendar
 
+@kotlinx.serialization.Serializable
 data class RoomSummary(
     val roomId: String,
     val displayName: String,
@@ -58,6 +59,8 @@ data class RoomSummary(
     val unreadCount: Long,
     val lastTimestamp: Long,
     val isFavorite: Boolean = false,
+    /** Event the preview was built from, so a reopen can skip the timeline walk. */
+    val lastEventId: String? = null,
 )
 
 /** Format a millisecond timestamp for display in the chat list. */
@@ -209,6 +212,10 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
     private val latestLastMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val latestFavorites    = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    /** Finished rows, seeded from disk so the list is filled before sync catches up. */
+    private val summaries = java.util.concurrent.ConcurrentHashMap<String, RoomSummary>()
+    private var saveJob: kotlinx.coroutines.Job? = null
+
     fun toggleFavoritesFilter() {
         val newValue = !_showOnlyFavorites.value
         _showOnlyFavorites.value = newValue
@@ -217,26 +224,56 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
     }
 
     private fun rebuildRooms() {
-        val sortedRooms = latestRooms.values
+        latestRooms.values
             .filter { it.lastRelevantEventTimestamp != null }
-            .filter { !_showOnlyFavorites.value || latestFavorites[it.roomId.full] == true }
-            .sortedByDescending { it.lastRelevantEventTimestamp }
+            .forEach { r ->
+                val id = r.roomId.full
+                val previous = summaries[id]
+                summaries[id] = RoomSummary(
+                    roomId        = id,
+                    displayName   = latestRoomNames[id] ?: previous?.displayName ?: "Chat",
+                    lastMessage   = latestLastMessages[id] ?: previous?.lastMessage ?: "",
+                    unreadCount   = r.unreadMessageCount,
+                    lastTimestamp = r.lastRelevantEventTimestamp
+                        ?.toEpochMilliseconds() ?: 0L,
+                    isFavorite    = latestFavorites[id] ?: previous?.isFavorite ?: false,
+                    lastEventId   = r.lastRelevantEventId?.full ?: previous?.lastEventId,
+                )
+            }
+
+        _rooms.value = visibleRooms()
+        scheduleSave()
+    }
+
+    private fun visibleRooms(): List<RoomSummary> =
+        summaries.values
+            .filter { !_showOnlyFavorites.value || it.isFavorite }
+            .sortedByDescending { it.lastTimestamp }
             .take(20)
 
-        _rooms.value = sortedRooms.map { r ->
-            RoomSummary(
-                roomId      = r.roomId.full,
-                displayName = latestRoomNames[r.roomId.full] ?: "Chat",
-                lastMessage = latestLastMessages[r.roomId.full] ?: "",
-                unreadCount = r.unreadMessageCount,
-                lastTimestamp = r.lastRelevantEventTimestamp
-                    ?.toEpochMilliseconds() ?: 0L,
-                isFavorite  = latestFavorites[r.roomId.full] == true,
-            )
+    /** Write the rows out once the burst of per-room updates has settled. */
+    private fun scheduleSave() {
+        val context = BeeperRepository.appContext ?: return
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(1_000)
+            BeeperChatListCache.save(context, summaries.values.toList())
         }
     }
 
     init {
+        BeeperRepository.appContext?.let { context ->
+            BeeperChatListCache.load(context).forEach { summary ->
+                summaries[summary.roomId] = summary
+                latestRoomNames[summary.roomId] = summary.displayName
+                if (summary.lastMessage.isNotEmpty()) {
+                    latestLastMessages[summary.roomId] = summary.lastMessage
+                }
+                latestFavorites[summary.roomId] = summary.isFavorite
+            }
+            _rooms.value = visibleRooms()
+        }
+
         val client = BeeperRepository.getClient()
         if (client != null) {
             viewModelScope.launch {
@@ -264,6 +301,7 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                             latestRoomNames.remove(entry.key)
                             latestLastMessages.remove(entry.key)
                             latestFavorites.remove(entry.key)
+                            summaries.remove(entry.key)
                             it.remove()
                         }
                     }
@@ -335,8 +373,15 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                         val finalName = prefix + computedName
 
                                         val startId = room.lastRelevantEventId
+                                        val cached = summaries[room.roomId.full]
                                         if (startId == null) {
                                             flowOf(Triple(room, finalName, ""))
+                                        } else if (cached?.lastEventId == startId.full &&
+                                            cached.lastMessage.isNotEmpty()
+                                        ) {
+                                            // Same last event as the cached row, so the stored
+                                            // preview still holds: skip the timeline walk.
+                                            flowOf(Triple(room, finalName, cached.lastMessage))
                                         } else {
                                             client.room.getTimelineEvent(room.roomId, startId)
                                                 .map { startEvent ->
