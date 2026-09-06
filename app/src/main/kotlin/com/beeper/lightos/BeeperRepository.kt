@@ -15,6 +15,8 @@ import io.ktor.utils.io.toByteArray
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -29,6 +31,14 @@ import okio.Path.Companion.toPath
 import java.util.UUID
 
 object BeeperRepository {
+    /**
+     * Matrix push gateway that forwards to the LightOS UnifiedPush endpoint.
+     * Beeper's homeserver only accepts a pusher url on /_matrix/push/v1/notify,
+     * which LightOS does not serve — see push-gateway/ for the worker and how to
+     * deploy it, then put its URL here.
+     */
+    private const val PUSH_GATEWAY_URL = ""
+
     /** Captured from outgoing OkHttp requests — used for authenticated media downloads. */
     @Volatile private var _accessToken: String? = null
     fun getAccessToken(): String? = _accessToken
@@ -73,6 +83,13 @@ object BeeperRepository {
     val isLoggedIn: StateFlow<Boolean> = _isLoggedIn.asStateFlow()
 
     private var matrixClient: MatrixClient? = null
+        set(value) {
+            field = value
+            clientFlow.value = value
+        }
+
+    /** Mirrors [matrixClient] so callers can wait for it to exist. */
+    private val clientFlow = MutableStateFlow<MatrixClient?>(null)
     private val httpClient = HttpClient()
     private var isInitialized = false
     var appContext: android.content.Context? = null
@@ -218,17 +235,30 @@ object BeeperRepository {
     private var pendingPushEndpoint: String? = null
 
     suspend fun registerPushEndpoint(pushEndpoint: String) {
-        val currentClient = matrixClient
+        // LightOS usually hands over the endpoint before the store is open, so wait
+        // for the client instead of dropping the registration on the floor.
+        pendingPushEndpoint = pushEndpoint
+        val currentClient = matrixClient ?: run {
+            android.util.Log.d("BeeperRepository", "matrixClient not ready, waiting before registering pusher")
+            clientFlow.filterNotNull().first()
+        }
         if (currentClient == null) {
-            android.util.Log.e("BeeperRepository", "matrixClient is null, caching pusher for later")
-            pendingPushEndpoint = pushEndpoint
+            android.util.Log.e("BeeperRepository", "no matrixClient after login, pusher not registered")
             return
         }
         
         try {
+            if (PUSH_GATEWAY_URL.isBlank()) {
+                android.util.Log.w(
+                    "BeeperRepository",
+                    "No push gateway configured; the homeserver will refuse the raw endpoint",
+                )
+                return
+            }
+            // url = the gateway, pushkey = the endpoint it should deliver to.
             val data = net.folivo.trixnity.clientserverapi.model.push.PusherData(
                 format = "event_id_only",
-                url = pushEndpoint,
+                url = PUSH_GATEWAY_URL.trimEnd('/') + "/_matrix/push/v1/notify",
                 customFields = kotlinx.serialization.json.buildJsonObject {}
             )
             val request = net.folivo.trixnity.clientserverapi.model.push.SetPushers.Request.Set(
@@ -243,7 +273,7 @@ object BeeperRepository {
                 profileTag = ""
             )
             currentClient.api.push.setPushers(request).getOrThrow()
-            android.util.Log.d("BeeperRepository", "Successfully registered pusher")
+            android.util.Log.d("BeeperRepository", "Successfully registered pusher for $pushEndpoint")
             pendingPushEndpoint = null
         } catch (e: Exception) {
             android.util.Log.e("BeeperRepository", "Failed to register pusher", e)
