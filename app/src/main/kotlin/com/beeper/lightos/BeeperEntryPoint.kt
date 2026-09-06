@@ -1,10 +1,6 @@
 package com.beeper.lightos
 
-import android.os.Build
 import android.util.Log
-import androidx.core.app.NotificationChannelCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import com.thelightphone.sdk.EntryPoint
 import com.thelightphone.sdk.LightEntryPoint
 import com.thelightphone.sdk.shared.LightServerData
@@ -14,7 +10,6 @@ import kotlinx.coroutines.flow.filterNotNull
 @EntryPoint
 object BeeperEntryPoint : LightEntryPoint {
     private const val TAG = "BeeperEntryPoint"
-    private const val CHANNEL_ID = "beeper_messages"
 
     override val enablePushNotifications = true
 
@@ -35,7 +30,14 @@ object BeeperEntryPoint : LightEntryPoint {
     override suspend fun onPushNotification(data: ByteArray) {
         val payloadStr = String(data)
         Log.d(TAG, "Received push notification: $payloadStr")
-        
+
+        // The pusher is registered as event_id_only, so the payload carries no text.
+        // Post a placeholder anyway to see whether LightOS surfaces it at all.
+        BeeperRepository.appContext?.let { context ->
+            val result = BeeperNotifications.post(context, "Chat", "New message")
+            Log.d(TAG, "Notification attempt from push: $result")
+        } ?: Log.e(TAG, "appContext is null, cannot post a notification")
+
         try {
             BeeperRepository.forceBackgroundSync()
         } catch (e: Exception) {

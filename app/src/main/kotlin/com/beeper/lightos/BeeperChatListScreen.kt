@@ -642,6 +642,84 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
                             ) {
                                 LightText("Logout", variant = LightTextVariant.Copy)
                             }
+
+                            // Does LightOS show anything for a tool's notification? Find out.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        horizontal = 1f.gridUnitsAsDp(),
+                                        vertical = 0.75f.gridUnitsAsDp()
+                                    )
+                                    .lightClickable {
+                                        val context = BeeperRepository.appContext
+                                        notificationTestResult = if (context == null) {
+                                            "No context"
+                                        } else when (
+                                            BeeperNotifications.post(
+                                                context,
+                                                "Chat",
+                                                "Test notification",
+                                            )
+                                        ) {
+                                            BeeperNotifications.Result.POSTED ->
+                                                "Posted, watch the screen"
+                                            BeeperNotifications.Result.NO_PERMISSION ->
+                                                "Blocked: permission not granted"
+                                            BeeperNotifications.Result.DISABLED ->
+                                                "Posted, but notifications are off"
+                                            BeeperNotifications.Result.REFUSED ->
+                                                "Refused by the system"
+                                        }
+                                    },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                LightText("Test notification", variant = LightTextVariant.Copy)
+                            }
+
+                            // Same test, but late enough to close the tool first.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        horizontal = 1f.gridUnitsAsDp(),
+                                        vertical = 0.75f.gridUnitsAsDp()
+                                    )
+                                    .lightClickable {
+                                        val context = BeeperRepository.appContext
+                                        notificationTestResult = if (context == null) {
+                                            "No context"
+                                        } else if (
+                                            com.thelightphone.sdk.LightWork.enqueue(
+                                                com.thelightphone.sdk.SealedLightContext(context),
+                                                "beeper-test-notification",
+                                                mapOf("delaySeconds" to "20"),
+                                            )
+                                        ) {
+                                            "Scheduled, close the tool now"
+                                        } else {
+                                            "Could not schedule the job"
+                                        }
+                                    },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                LightText("Test notification in 20s", variant = LightTextVariant.Copy)
+                            }
+
+                            notificationTestResult?.let { result ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 1f.gridUnitsAsDp()),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    LightText(
+                                        text = result,
+                                        variant = LightTextVariant.Fine,
+                                        lighten = true,
+                                    )
+                                }
+                            }
                             
                             androidx.compose.foundation.layout.Spacer(modifier = Modifier.weight(1f))
                             
