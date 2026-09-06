@@ -16,7 +16,8 @@ import com.thelightphone.sdk.ui.LightTextField
 import com.thelightphone.sdk.ui.LightTheme
 import com.thelightphone.sdk.ui.LightThemeController
 import com.thelightphone.sdk.ui.LightThemeTokens
-import com.thelightphone.sdk.rememberKeyboardOptions
+import com.thelightphone.sdk.ui.defaultKeyboardOptions
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 class BeeperVerifyScreen(
@@ -36,7 +37,10 @@ class BeeperVerifyScreen(
         val isLoggedIn by BeeperRepository.isLoggedIn.collectAsState()
         val themeColors by LightThemeController.colors.collectAsState()
 
-        val keyboardOptionsFlow = rememberKeyboardOptions()
+        // Static defaults instead of rememberKeyboardOptions(): LightOS on the LP3
+        // answers GetKeyboardOptions with a payload this SDK version cannot parse,
+        // and the deserialization error takes the whole process down.
+        val keyboardOptionsFlow = remember { MutableStateFlow(defaultKeyboardOptions()) }
 
         LightTheme(colors = themeColors) {
             Box(
