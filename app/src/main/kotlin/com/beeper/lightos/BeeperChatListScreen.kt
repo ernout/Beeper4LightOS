@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import android.Manifest
 import com.thelightphone.sdk.rememberPermissionRequestLauncher
+import com.thelightphone.sdk.shared.getOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -456,10 +457,16 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
 
         var showLogoutConfirmation by remember { mutableStateOf(false) }
         var showMenu by remember { mutableStateOf(false) }
+        var notificationTestResult by remember { mutableStateOf<String?>(null) }
         
         val permissionLauncher = rememberPermissionRequestLauncher(Manifest.permission.POST_NOTIFICATIONS)
         androidx.compose.runtime.LaunchedEffect(Unit) {
-            permissionLauncher?.launch()
+            val result = com.thelightphone.sdk.checkPermission(Manifest.permission.POST_NOTIFICATIONS)
+            val isGranted = result.getOrNull()?.permissionResult ==
+                com.thelightphone.sdk.shared.LightServiceMethod.GetPermission.Result.Granted
+            if (!isGranted && BeeperPermissions.shouldAsk(Manifest.permission.POST_NOTIFICATIONS)) {
+                permissionLauncher?.launch()
+            }
         }
 
         LightTheme(colors = themeColors) {
