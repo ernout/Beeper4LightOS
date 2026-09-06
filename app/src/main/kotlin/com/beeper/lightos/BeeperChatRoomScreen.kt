@@ -980,7 +980,12 @@ class BeeperChatRoomScreen(
         androidx.compose.runtime.LaunchedEffect(permissionLauncher) {
             val result = com.thelightphone.sdk.checkPermission(android.Manifest.permission.RECORD_AUDIO)
             val isGranted = result.getOrNull()?.permissionResult == com.thelightphone.sdk.shared.LightServiceMethod.GetPermission.Result.Granted
-            if (!isGranted && BeeperPermissions.shouldAsk(android.Manifest.permission.RECORD_AUDIO)) {
+            val grantedOnAndroid = BeeperRepository.appContext
+                ?.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!isGranted && !grantedOnAndroid &&
+                BeeperPermissions.shouldAsk(android.Manifest.permission.RECORD_AUDIO)
+            ) {
                 permissionLauncher?.launch()
             }
         }

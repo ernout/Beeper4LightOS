@@ -459,15 +459,11 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
         var showMenu by remember { mutableStateOf(false) }
         var notificationTestResult by remember { mutableStateOf<String?>(null) }
         
+        // Asked for from the menu, never on open: LightOS will not grant
+        // POST_NOTIFICATIONS to a tool and answers with a full-screen "Not allowed"
+        // that becomes the root of this tool's task, so you land on that instead of
+        // on the chat list.
         val permissionLauncher = rememberPermissionRequestLauncher(Manifest.permission.POST_NOTIFICATIONS)
-        androidx.compose.runtime.LaunchedEffect(Unit) {
-            val result = com.thelightphone.sdk.checkPermission(Manifest.permission.POST_NOTIFICATIONS)
-            val isGranted = result.getOrNull()?.permissionResult ==
-                com.thelightphone.sdk.shared.LightServiceMethod.GetPermission.Result.Granted
-            if (!isGranted && BeeperPermissions.shouldAsk(Manifest.permission.POST_NOTIFICATIONS)) {
-                permissionLauncher?.launch()
-            }
-        }
 
         LightTheme(colors = themeColors) {
             Box(
@@ -641,6 +637,19 @@ class BeeperChatListScreen(private val sealedActivity: SealedLightActivity) :
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 LightText("Logout", variant = LightTextVariant.Copy)
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(
+                                        horizontal = 1f.gridUnitsAsDp(),
+                                        vertical = 0.75f.gridUnitsAsDp()
+                                    )
+                                    .lightClickable { permissionLauncher?.launch() },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                LightText("Ask for notification permission", variant = LightTextVariant.Copy)
                             }
 
                             // Does LightOS show anything for a tool's notification? Find out.
