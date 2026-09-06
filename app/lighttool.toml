@@ -4,5 +4,5 @@ label       = "Chat"
 versionCode = 4
 versionName = "0.0.4"
 packageName = "me.ironfeet.beeper4lightos"
-serverPackage = "me.ironfeet"
+serverPackage = "com.lightos"
 permissions = ["android.permission.INTERNET", "android.permission.POST_NOTIFICATIONS", "android.permission.CAMERA", "android.permission.RECORD_AUDIO"]
