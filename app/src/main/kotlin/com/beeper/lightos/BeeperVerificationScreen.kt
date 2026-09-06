@@ -74,7 +74,6 @@ class BeeperVerificationScreen(
         var securityCode by remember { mutableStateOf("") }
         var isEnteringCode by remember { mutableStateOf(false) }
         var isEditingCode by remember { mutableStateOf(false) }
-        val keyboardOptionsFlow = com.thelightphone.sdk.rememberKeyboardOptions()
 
         LightTheme(colors = themeColors) {
             Box(
@@ -84,12 +83,10 @@ class BeeperVerificationScreen(
             ) {
                 if (isEditingCode) {
                     val textFieldState = androidx.compose.foundation.text.input.rememberTextFieldState(securityCode)
-                    val editorKey = remember { java.util.UUID.randomUUID().toString() }
-                    com.thelightphone.sdk.ui.LightTextInputEditor(
+                    BeeperSystemTextEditor(
                         title = "Security Code",
                         state = textFieldState,
-                        keyboardOptionsFlow = keyboardOptionsFlow,
-                        editorKey = editorKey,
+                        submitLabel = "DONE",
                         onSubmit = {
                             securityCode = it.toString()
                             isEditingCode = false

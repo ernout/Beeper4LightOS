@@ -48,7 +48,6 @@ import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.LightTopBar
 import com.thelightphone.sdk.ui.LightTopBarCenter
 import com.thelightphone.sdk.ui.LightTextField
-import com.thelightphone.sdk.ui.LightTextInputEditor
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -997,7 +996,6 @@ class BeeperChatRoomScreen(
         var isReplyingTo    by remember { mutableStateOf<ChatMessage?>(null) }
         var isReactingTo    by remember { mutableStateOf<ChatMessage?>(null) }
         
-        val keyboardOptionsFlow = com.thelightphone.sdk.rememberKeyboardOptions()
         
         val listState = androidx.compose.foundation.lazy.rememberLazyListState()
 
@@ -1015,15 +1013,12 @@ class BeeperChatRoomScreen(
                     .fillMaxSize()
                     .background(LightThemeTokens.colors.background)
             ) {
-                // ── Full-screen text input editor (LP3 keyboard) ──────────────
+                // ── Full-screen text input editor (system keyboard) ───────────
                 if (isEditingMessage) {
 
-                    val editorKey = remember(roomId) { "chat_input_$roomId" }
-                    BeeperTextInputEditor(
+                    BeeperSystemTextEditor(
                         title            = "Message",
                         state            = textFieldState,
-                        keyboardOptionsFlow = keyboardOptionsFlow,
-                        editorKey        = editorKey,
                         onSubmit         = { result ->
                             val resultText = result.toString()
                             android.util.Log.d("BeeperChatRoom", "Submit: '$resultText'")
@@ -1035,7 +1030,7 @@ class BeeperChatRoomScreen(
                             }
                         },
                         onBack  = { isEditingMessage = false },
-                        modifier = Modifier.fillMaxSize().imePadding()
+                        modifier = Modifier.fillMaxSize()
                     )
                     return@Box
                 }
