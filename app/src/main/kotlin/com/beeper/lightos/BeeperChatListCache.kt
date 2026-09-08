@@ -31,6 +31,10 @@ object BeeperChatListCache {
         }
     }
 
+    /** Whether a room is a favourite according to the cached rows, null if unknown. */
+    fun favoriteFlag(context: android.content.Context, roomId: String): Boolean? =
+        load(context).firstOrNull { it.roomId == roomId }?.isFavorite
+
     fun save(context: android.content.Context, summaries: List<RoomSummary>) {
         try {
             val trimmed = summaries.sortedByDescending { it.lastTimestamp }.take(MAX_ENTRIES)

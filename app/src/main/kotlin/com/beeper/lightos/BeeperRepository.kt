@@ -22,6 +22,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.folivo.trixnity.client.MatrixClient
 import net.folivo.trixnity.client.login
+import net.folivo.trixnity.client.room
 import net.folivo.trixnity.client.fromStore
 import net.folivo.trixnity.client.media.InMemoryMediaStore
 import net.folivo.trixnity.client.store.repository.room.createRoomRepositoriesModule
@@ -352,6 +353,25 @@ object BeeperRepository {
     }
 
     fun getClient(): MatrixClient? = matrixClient
+
+    /**
+     * Whether a room carries the m.favourite tag, or null when there is no client
+     * to ask - the cached chat list is the faster answer and comes first.
+     */
+    suspend fun isFavoriteRoom(roomId: String): Boolean? {
+        val client = matrixClient ?: return null
+        return try {
+            client.room.getAccountData(
+                net.folivo.trixnity.core.model.RoomId(roomId),
+                net.folivo.trixnity.core.model.events.m.TagEventContent::class,
+            ).first()?.tags?.containsKey(
+                net.folivo.trixnity.core.model.events.m.TagEventContent.TagName.Favourite
+            ) == true
+        } catch (e: Exception) {
+            android.util.Log.e("BeeperRepository", "Could not read the tags of $roomId", e)
+            null
+        }
+    }
 
     suspend fun logout() {
         try {
