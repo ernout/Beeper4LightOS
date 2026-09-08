@@ -17,7 +17,9 @@ import androidx.core.app.NotificationManagerCompat
  */
 object BeeperNotifications {
     private const val TAG = "BeeperNotifications"
-    private const val CHANNEL_ID = "beeper_messages"
+    // A channel's sound and vibration are fixed once Android has seen it, so a
+    // change of heart needs a new id rather than a new Builder call.
+    private const val CHANNEL_ID = "beeper_messages_v2"
 
     /** Result of a post attempt, so the UI can say something more useful than nothing. */
     enum class Result { POSTED, NO_PERMISSION, DISABLED, REFUSED }
@@ -30,6 +32,10 @@ object BeeperNotifications {
             NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_HIGH)
                 .setName("Messages")
                 .setDescription("New chat messages")
+                // LightOS draws nothing for a tool's notification, so sound and
+                // vibration are the whole of the alert.
+                .setVibrationEnabled(true)
+                .setVibrationPattern(longArrayOf(0, 250, 150, 250))
                 .build()
         )
 
