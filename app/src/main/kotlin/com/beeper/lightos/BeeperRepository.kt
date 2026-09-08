@@ -95,7 +95,13 @@ object BeeperRepository {
     private val clientFlow = MutableStateFlow<MatrixClient?>(null)
     private val httpClient = HttpClient()
     private var isInitialized = false
+    /**
+     * Set by [init] once the UI runs, but a process started by a push has no UI —
+     * so fall back to the Context the :appcontext provider captured at process
+     * start. Without that fallback a cold push can neither sync nor notify.
+     */
     var appContext: android.content.Context? = null
+        get() = field ?: com.beeper.lightos.appcontext.AppContext.instance
 
     suspend fun getOrInitMatrixClient(context: android.content.Context): MatrixClient? {
         if (matrixClient != null) return matrixClient

@@ -75,6 +75,10 @@ kotlin {
 }
 
 dependencies {
+    // Only there for its manifest: a provider that captures the application
+    // Context at process start, which the SDK gives a tool no other way to get.
+    implementation(project(":appcontext"))
+
     implementation("com.thelightphone:client:0.0.11")
     implementation("com.thelightphone:ui:0.0.11")
     

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A library manifest, unlike the tool's own, is merged into the generated
+  manifest by AGP. That is the whole point of this module: a provider declared
+  here runs at process start, including a process started by a push, and hands
+  the tool an application Context it otherwise has no way to obtain.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider
+            android:name="com.beeper.lightos.appcontext.AppContextProvider"
+            android:authorities="${applicationId}.appcontext"
+            android:exported="false"
+            android:initOrder="1000" />
+    </application>
+</manifest>

@@ -31,3 +31,4 @@ includeBuild("../light-sdk")
 includeBuild("../light-sdk/plugin")
 
 include(":app")
+include(":appcontext")
