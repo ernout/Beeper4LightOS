@@ -133,19 +133,17 @@ class BeeperCameraScreen(
 
         val permissionLauncher =
             com.thelightphone.sdk.rememberPermissionRequestLauncher(android.Manifest.permission.CAMERA)
-        androidx.compose.runtime.LaunchedEffect(permissionLauncher) {
-            val result = com.thelightphone.sdk.checkPermission(android.Manifest.permission.CAMERA)
-            val isGranted = result.getOrNull()?.permissionResult ==
-                com.thelightphone.sdk.shared.LightServiceMethod.GetPermission.Result.Granted
-            if (!isGranted) {
-                permissionLauncher?.launch()
-            }
-        }
 
         val appContext = BeeperRepository.appContext
+        // Android's own answer, not LightOS's bookkeeping: a permission granted over
+        // adb is invisible to the server but is what the camera actually goes by.
+        val cameraGranted = remember(appContext) {
+            appContext?.checkSelfPermission(android.Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
         val captureExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
-        val controller = remember(appContext) {
-            appContext?.let {
+        val controller = remember(appContext, cameraGranted) {
+            appContext?.takeIf { cameraGranted }?.let {
                 androidx.camera.view.LifecycleCameraController(it).apply {
                     setEnabledUseCases(androidx.camera.view.CameraController.IMAGE_CAPTURE)
                     cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
@@ -186,7 +184,31 @@ class BeeperCameraScreen(
 
                     when (val s = state) {
                         is BeeperCameraViewModel.State.Preview -> {
-                            if (controller == null) {
+                            if (!cameraGranted) {
+                                Column(modifier = Modifier.padding(1f.gridUnitsAsDp())) {
+                                    LightText(
+                                        text = "No camera permission, so the preview stays black.",
+                                        variant = LightTextVariant.Copy,
+                                    )
+                                    LightText(
+                                        text = "LightOS does not hand CAMERA to tools yet. Until it does:" +
+                                            "\nadb shell pm grant me.ironfeet.beeper4lightos " +
+                                            "android.permission.CAMERA",
+                                        variant = LightTextVariant.Fine,
+                                        lighten = true,
+                                        modifier = Modifier.padding(top = 0.5f.gridUnitsAsDp()),
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 1f.gridUnitsAsDp())
+                                            .lightClickable { permissionLauncher?.launch() },
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        LightText(text = "Ask anyway", variant = LightTextVariant.Copy)
+                                    }
+                                }
+                            } else if (controller == null) {
                                 LightText(
                                     text = "Camera unavailable.",
                                     variant = LightTextVariant.Copy,
