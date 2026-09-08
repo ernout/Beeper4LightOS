@@ -35,9 +35,11 @@ object BeeperRepository {
      * Matrix push gateway that forwards to the LightOS UnifiedPush endpoint.
      * Beeper's homeserver only accepts a pusher url on /_matrix/push/v1/notify,
      * which LightOS does not serve — see push-gateway/ for the worker and how to
-     * deploy it, then put its URL here.
+     * deploy it. The URL is personal to one phone, so it comes from
+     * local.properties (pushGatewayUrl=...) rather than from this file.
      */
-    private const val PUSH_GATEWAY_URL = ""
+    private val PUSH_GATEWAY_URL: String =
+        me.ironfeet.beeper4lightos.BuildConfig.PUSH_GATEWAY_URL
 
     /** Captured from outgoing OkHttp requests — used for authenticated media downloads. */
     @Volatile private var _accessToken: String? = null

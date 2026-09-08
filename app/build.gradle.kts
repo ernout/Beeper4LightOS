@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -18,6 +20,21 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    defaultConfig {
+        // The push gateway URL is personal to this phone, so it lives in
+        // local.properties (git-ignored) as pushGatewayUrl=https://...
+        // Without it the app simply does not register a pusher.
+        val localProperties = Properties().apply {
+            val file = rootProject.file("local.properties")
+            if (file.exists()) file.inputStream().use { load(it) }
+        }
+        buildConfigField(
+            "String",
+            "PUSH_GATEWAY_URL",
+            "\"${localProperties.getProperty("pushGatewayUrl", "")}\"",
+        )
     }
 
     signingConfigs {

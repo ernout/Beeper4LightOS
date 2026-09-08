@@ -23,9 +23,15 @@ npx wrangler deploy
 ```
 
 Wrangler prints the URL it deployed to, something like
-`https://beeper-lp3-push-gateway.<subdomain>.workers.dev`. Put that in
-`PUSH_GATEWAY_URL` in `BeeperRepository.kt`, rebuild, and reinstall — the app
-registers the pusher with it on the next start.
+`https://beeper-lp3-push-gateway.<subdomain>.workers.dev`. That URL belongs to
+one phone, so it goes in `local.properties`, which git ignores:
+
+```properties
+pushGatewayUrl=https://beeper-lp3-push-gateway.<subdomain>.workers.dev
+```
+
+Rebuild and reinstall; the app registers the pusher with it on the next start.
+Leave the line out and the app skips the registration and says so in the log.
 
 ## Check it works
 
