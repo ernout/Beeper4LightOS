@@ -1349,6 +1349,20 @@ class BeeperChatRoomScreen(
                                         LightText("Cancel", variant = LightTextVariant.Copy, align = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth())
                                     }
                                 } else {
+                                    val video = msg?.mediaContent as? RoomMessageEventContent.FileBased.Video
+                                    if (video != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(1f.gridUnitsAsDp())
+                                                .lightClickable(onClick = {
+                                                    selectedMessage = null
+                                                    navigateTo(screenFactory = { BeeperVideoScreen(it, video) })
+                                                })
+                                        ) {
+                                            LightText("Play video", variant = LightTextVariant.Copy, align = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                                        }
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
