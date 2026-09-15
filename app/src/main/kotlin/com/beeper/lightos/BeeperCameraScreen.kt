@@ -13,6 +13,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import kotlinx.coroutines.launch
 import net.folivo.trixnity.client.MatrixClient
 import net.folivo.trixnity.client.room
 import net.folivo.trixnity.client.room.message.image
+import net.folivo.trixnity.client.room.message.video
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.utils.toByteArrayFlow
 
@@ -53,6 +56,14 @@ class BeeperCameraViewModel(
     sealed interface State {
         data object Preview : State
         data class Captured(val bitmap: android.graphics.Bitmap) : State
+        data object Recording : State
+        data class CapturedVideo(
+            val file: java.io.File,
+            val durationMs: Long,
+            val width: Int?,
+            val height: Int?,
+            val preview: android.graphics.Bitmap?,
+        ) : State
         data object Sending : State
         data object Sent : State
         data class Error(val message: String) : State
@@ -70,7 +81,89 @@ class BeeperCameraViewModel(
     }
 
     fun retake() {
+        (_state.value as? State.CapturedVideo)?.file?.delete()
         _state.value = State.Preview
+    }
+
+    fun onRecordingStarted() {
+        _state.value = State.Recording
+    }
+
+    /** Reads what the recording turned out to be, so the screen can show it before sending. */
+    fun onRecorded(file: java.io.File) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(file.absolutePath)
+                fun meta(key: Int) = retriever.extractMetadata(key)
+                val duration = meta(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                val rawWidth = meta(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                val rawHeight = meta(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                // The stored frame size ignores rotation; a portrait recording needs the swap.
+                val rotated = meta(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull()?.let { it == 90 || it == 270 } == true
+                _state.value = State.CapturedVideo(
+                    file = file,
+                    durationMs = duration,
+                    width = if (rotated) rawHeight else rawWidth,
+                    height = if (rotated) rawWidth else rawHeight,
+                    preview = retriever.getFrameAtTime(0),
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("BeeperCamera", "Could not read the recording", e)
+                file.delete()
+                _state.value = State.Error("Recording failed")
+            } finally {
+                retriever.release()
+            }
+        }
+    }
+
+    fun sendVideo() {
+        val current = _state.value
+        if (current !is State.CapturedVideo) return
+        _state.value = State.Sending
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val bytes = current.file.readBytes()
+                val thumbnail = current.preview?.let { frame ->
+                    val scale = 480f / maxOf(frame.width, frame.height)
+                    val small = if (scale < 1f) android.graphics.Bitmap.createScaledBitmap(
+                        frame, (frame.width * scale).toInt(), (frame.height * scale).toInt(), true,
+                    ) else frame
+                    val out = java.io.ByteArrayOutputStream()
+                    small.compress(android.graphics.Bitmap.CompressFormat.JPEG, 80, out)
+                    small to out.toByteArray()
+                }
+
+                client.room.sendMessage(RoomId(roomId)) {
+                    video(
+                        body = "video.mp4",
+                        video = bytes.toByteArrayFlow(),
+                        fileName = "video.mp4",
+                        type = io.ktor.http.ContentType.Video.MP4,
+                        size = bytes.size.toLong(),
+                        height = current.height,
+                        width = current.width,
+                        duration = current.durationMs,
+                        thumbnail = thumbnail?.second?.toByteArrayFlow(),
+                        thumbnailInfo = thumbnail?.let { (small, jpeg) ->
+                            net.folivo.trixnity.core.model.events.m.room.ThumbnailInfo(
+                                height = small.height,
+                                width = small.width,
+                                mimeType = "image/jpeg",
+                                size = jpeg.size.toLong(),
+                            )
+                        },
+                    )
+                }
+                current.file.delete()
+                _state.value = State.Sent
+            } catch (e: Exception) {
+                android.util.Log.e("BeeperCamera", "Failed to send video", e)
+                _state.value = State.Error("Sending failed")
+            }
+        }
     }
 
     fun send() {
@@ -145,15 +238,45 @@ class BeeperCameraScreen(
         val controller = remember(appContext, cameraGranted) {
             appContext?.takeIf { cameraGranted }?.let {
                 androidx.camera.view.LifecycleCameraController(it).apply {
-                    setEnabledUseCases(androidx.camera.view.CameraController.IMAGE_CAPTURE)
+                    setEnabledUseCases(
+                        androidx.camera.view.CameraController.IMAGE_CAPTURE or
+                            androidx.camera.view.CameraController.VIDEO_CAPTURE
+                    )
+                    // SD keeps a minute of video a few megabytes - chat-sized, like the photos.
+                    videoCaptureQualitySelector = androidx.camera.video.QualitySelector.from(
+                        androidx.camera.video.Quality.SD,
+                        androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(
+                            androidx.camera.video.Quality.SD
+                        ),
+                    )
                     cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
                 }
+            }
+        }
+
+        var recording by remember { mutableStateOf<androidx.camera.video.Recording?>(null) }
+        var elapsedMs by remember { mutableStateOf(0L) }
+        val isRecording = state is BeeperCameraViewModel.State.Recording
+
+        // Tick the counter while recording, and stop at the cap so a forgotten
+        // recording cannot grow into an upload nobody wants to wait for.
+        androidx.compose.runtime.LaunchedEffect(isRecording) {
+            if (!isRecording) return@LaunchedEffect
+            val startedAt = android.os.SystemClock.elapsedRealtime()
+            while (true) {
+                elapsedMs = android.os.SystemClock.elapsedRealtime() - startedAt
+                if (elapsedMs >= MAX_RECORDING_MS) {
+                    recording?.stop()
+                    break
+                }
+                kotlinx.coroutines.delay(250)
             }
         }
 
         DisposableEffect(controller) {
             controller?.bindToLifecycle(androidx.lifecycle.ProcessLifecycleOwner.get())
             onDispose {
+                recording?.stop()
                 controller?.unbind()
                 captureExecutor.shutdown()
             }
@@ -178,12 +301,13 @@ class BeeperCameraScreen(
                             icon = LightIcons.BACK,
                             onClick = { goBack(null) },
                         ),
-                        center = LightTopBarCenter.Text("Photo"),
+                        center = LightTopBarCenter.Text("Camera"),
                         rightButton = null,
                     )
 
                     when (val s = state) {
-                        is BeeperCameraViewModel.State.Preview -> {
+                        is BeeperCameraViewModel.State.Preview,
+                        is BeeperCameraViewModel.State.Recording -> {
                             if (!cameraGranted) {
                                 Column(modifier = Modifier.padding(1f.gridUnitsAsDp())) {
                                     LightText(
@@ -230,6 +354,7 @@ class BeeperCameraScreen(
                                         .fillMaxWidth()
                                         .padding(vertical = 1f.gridUnitsAsDp())
                                         .lightClickable {
+                                            if (isRecording) return@lightClickable
                                             controller.takePicture(
                                                 captureExecutor,
                                                 object : androidx.camera.core.ImageCapture.OnImageCapturedCallback() {
@@ -263,7 +388,28 @@ class BeeperCameraScreen(
                                         },
                                     contentAlignment = Alignment.Center,
                                 ) {
-                                    LightText(text = "Take Photo", variant = LightTextVariant.Copy)
+                                    LightText(text = "Take Photo", variant = LightTextVariant.Copy, lighten = isRecording)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 1f.gridUnitsAsDp())
+                                        .lightClickable {
+                                            val active = recording
+                                            if (active != null) {
+                                                active.stop()
+                                            } else {
+                                                recording = startRecording(controller, captureExecutor) { recording = null }
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    LightText(
+                                        text = if (isRecording) {
+                                            "Stop  ${elapsedMs / 60_000}:${"%02d".format(elapsedMs / 1000 % 60)}"
+                                        } else "Record Video",
+                                        variant = LightTextVariant.Copy,
+                                    )
                                 }
                             }
                         }
@@ -287,6 +433,46 @@ class BeeperCameraScreen(
                                     LightText(text = "Retake", variant = LightTextVariant.Copy, lighten = true)
                                 }
                                 Box(modifier = Modifier.lightClickable { viewModel.send() }) {
+                                    LightText(text = "Send", variant = LightTextVariant.Copy)
+                                }
+                            }
+                        }
+
+                        is BeeperCameraViewModel.State.CapturedVideo -> {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                s.preview?.let {
+                                    Image(
+                                        bitmap = it.asImageBitmap(),
+                                        contentDescription = "Recorded video",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                            }
+                            LightText(
+                                text = "Video  ${s.durationMs / 60_000}:${"%02d".format(s.durationMs / 1000 % 60)}" +
+                                    "  ·  ${"%.1f".format(s.file.length() / 1_048_576f)} MB",
+                                variant = LightTextVariant.Fine,
+                                lighten = true,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .padding(top = 0.5f.gridUnitsAsDp()),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 1f.gridUnitsAsDp()),
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                            ) {
+                                Box(modifier = Modifier.lightClickable { viewModel.retake() }) {
+                                    LightText(text = "Retake", variant = LightTextVariant.Copy, lighten = true)
+                                }
+                                Box(modifier = Modifier.lightClickable { viewModel.sendVideo() }) {
                                     LightText(text = "Send", variant = LightTextVariant.Copy)
                                 }
                             }
@@ -327,5 +513,50 @@ class BeeperCameraScreen(
                 }
             }
         }
+    }
+
+    /**
+     * Records to the cache. With RECORD_AUDIO granted the clip has sound; without it
+     * (LightOS does not grant it to tools) it records silently rather than failing.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun startRecording(
+        controller: androidx.camera.view.LifecycleCameraController,
+        executor: java.util.concurrent.Executor,
+        onFinished: () -> Unit,
+    ): androidx.camera.video.Recording? {
+        val context = BeeperRepository.appContext ?: return null
+        val dir = java.io.File(context.cacheDir, "recordings").apply { mkdirs() }
+        val file = java.io.File(dir, "video-${System.currentTimeMillis()}.mp4")
+        val withSound = context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        return try {
+            controller.startRecording(
+                androidx.camera.video.FileOutputOptions.Builder(file).build(),
+                if (withSound) androidx.camera.view.video.AudioConfig.create(true)
+                else androidx.camera.view.video.AudioConfig.AUDIO_DISABLED,
+                executor,
+            ) { event ->
+                if (event is androidx.camera.video.VideoRecordEvent.Finalize) {
+                    onFinished()
+                    if (event.hasError()) {
+                        android.util.Log.e("BeeperCamera", "Recording failed: ${event.error}", event.cause)
+                        file.delete()
+                        viewModel.onCaptureError("Recording failed")
+                    } else {
+                        viewModel.onRecorded(file)
+                    }
+                }
+            }.also { viewModel.onRecordingStarted() }
+        } catch (e: Exception) {
+            android.util.Log.e("BeeperCamera", "Could not start recording", e)
+            viewModel.onCaptureError("Could not start recording")
+            null
+        }
+    }
+
+    private companion object {
+        const val MAX_RECORDING_MS = 60_000L
     }
 }

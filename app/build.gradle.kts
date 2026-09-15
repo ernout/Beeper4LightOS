@@ -103,6 +103,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:1.5.0")
     implementation("androidx.camera:camera-lifecycle:1.5.0")
     implementation("androidx.camera:camera-view:1.5.0")
+    implementation("androidx.camera:camera-video:1.5.0")
 
     testImplementation(libs.kotlin.test)
 }
