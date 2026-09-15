@@ -94,7 +94,6 @@ private fun formatRoomTimestamp(timestamp: Long): String {
 
 /** Extract a short human-readable preview string from a Matrix message content. */
 private fun contentPreview(content: Any?): String? {
-    android.util.Log.e("BeeperPreviewDebug", "Content class: ${content?.let { it::class.simpleName }}, toString: $content")
     if (content == null) return null
     if (content is RoomMessageEventContent.TextBased) {
         var text = content.body
@@ -273,6 +272,9 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
         }
     }
 
+    /** Collects every room's row; runs only while the list is on screen. */
+    private var collectionJob: kotlinx.coroutines.Job? = null
+
     init {
         BeeperRepository.appContext?.let { context ->
             BeeperChatListCache.load(context).forEach { summary ->
@@ -294,158 +296,162 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                         level is net.folivo.trixnity.crypto.key.DeviceTrustLevel.CrossSigned && level.verified
                 }
             }
-            viewModelScope.launch(Dispatchers.IO) {
-                val jobs    = mutableMapOf<String, kotlinx.coroutines.Job>()
-                val tagJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
+            collectionJob = collectRooms(client)
+        }
+    }
 
-                client.room.getAll().collect { roomFlowsMap ->
-                    val currentRoomIds = roomFlowsMap.keys.map { it.full }.toSet()
-                    if (currentRoomIds.isEmpty()) return@collect
+    private fun collectRooms(client: net.folivo.trixnity.client.MatrixClient) =
+        viewModelScope.launch(Dispatchers.IO) {
+            val jobs    = mutableMapOf<String, kotlinx.coroutines.Job>()
+            val tagJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
 
-                    // Cancel jobs for removed rooms
-                    val it = jobs.iterator()
-                    while (it.hasNext()) {
-                        val entry = it.next()
-                        if (entry.key !in currentRoomIds) {
-                            entry.value.cancel()
-                            tagJobs.remove(entry.key)?.cancel()
-                            latestRooms.remove(entry.key)
-                            latestRoomNames.remove(entry.key)
-                            latestLastMessages.remove(entry.key)
-                            latestFavorites.remove(entry.key)
-                            latestPreviewEventIds.remove(entry.key)
-                            summaries.remove(entry.key)
-                            it.remove()
-                        }
+            client.room.getAll().collect { roomFlowsMap ->
+                val currentRoomIds = roomFlowsMap.keys.map { it.full }.toSet()
+                if (currentRoomIds.isEmpty()) return@collect
+
+                // Cancel jobs for removed rooms
+                val it = jobs.iterator()
+                while (it.hasNext()) {
+                    val entry = it.next()
+                    if (entry.key !in currentRoomIds) {
+                        entry.value.cancel()
+                        tagJobs.remove(entry.key)?.cancel()
+                        latestRooms.remove(entry.key)
+                        latestRoomNames.remove(entry.key)
+                        latestLastMessages.remove(entry.key)
+                        latestFavorites.remove(entry.key)
+                        latestPreviewEventIds.remove(entry.key)
+                        summaries.remove(entry.key)
+                        it.remove()
                     }
+                }
 
-                    // Launch collector for each new room
-                    roomFlowsMap.forEach { (roomId, roomFlow) ->
-                        val id = roomId.full
-                        // Track the m.favourite tag (room account data) per room
-                        if (tagJobs[id] == null) {
-                            tagJobs[id] = launch {
-                                client.room.getAccountData(
-                                    roomId,
-                                    net.folivo.trixnity.core.model.events.m.TagEventContent::class,
-                                ).collect { tagContent ->
-                                    val fav = tagContent?.tags?.containsKey(
-                                        net.folivo.trixnity.core.model.events.m.TagEventContent.TagName.Favourite
-                                    ) == true
-                                    val previous = latestFavorites.put(id, fav)
-                                    if (previous != fav) rebuildRooms()
-                                }
+                // Launch collector for each new room
+                roomFlowsMap.forEach { (roomId, roomFlow) ->
+                    val id = roomId.full
+                    // Track the m.favourite tag (room account data) per room
+                    if (tagJobs[id] == null) {
+                        tagJobs[id] = launch {
+                            client.room.getAccountData(
+                                roomId,
+                                net.folivo.trixnity.core.model.events.m.TagEventContent::class,
+                            ).collect { tagContent ->
+                                val fav = tagContent?.tags?.containsKey(
+                                    net.folivo.trixnity.core.model.events.m.TagEventContent.TagName.Favourite
+                                ) == true
+                                val previous = latestFavorites.put(id, fav)
+                                if (previous != fav) rebuildRooms()
                             }
                         }
-                        if (jobs[id] == null) {
-                            jobs[id] = launch {
-                                roomFlow.flatMapLatest { room ->
-                                    if (room == null) flowOf(null)
-                                    else {
-                                        // ── Detect bridge type from hero user's localpart ──
-                                        val heroLocalpart = room.name?.heroes?.firstOrNull()?.localpart ?: ""
-                                        var bridgeLocalpart = heroLocalpart
-                                        if (bridgeLocalpart.isEmpty()) {
-                                            val allUsers = client.user.getAll(room.roomId).firstOrNull()?.keys ?: emptySet()
-                                            bridgeLocalpart = allUsers.find {
-                                                it.localpart.startsWith("whatsapp_") ||
-                                                it.localpart.startsWith("linkedin_") ||
-                                                it.localpart.startsWith("telegram_") ||
-                                                it.localpart.startsWith("instagram_") ||
-                                                it.localpart.startsWith("discord_") ||
-                                                it.localpart.startsWith("signal_") ||
-                                                it.localpart.startsWith("slack_") ||
-                                                it.localpart.startsWith("googlechat_") ||
-                                                it.localpart.startsWith("imessage_") ||
-                                                it.localpart.startsWith("android_sms_")
-                                            }?.localpart ?: ""
-                                        }
+                    }
+                    if (jobs[id] == null) {
+                        jobs[id] = launch {
+                            roomFlow.flatMapLatest { room ->
+                                if (room == null) flowOf(null)
+                                else {
+                                    // ── Detect bridge type from hero user's localpart ──
+                                    val heroLocalpart = room.name?.heroes?.firstOrNull()?.localpart ?: ""
+                                    var bridgeLocalpart = heroLocalpart
+                                    if (bridgeLocalpart.isEmpty()) {
+                                        val allUsers = client.user.getAll(room.roomId).firstOrNull()?.keys ?: emptySet()
+                                        bridgeLocalpart = allUsers.find {
+                                            it.localpart.startsWith("whatsapp_") ||
+                                            it.localpart.startsWith("linkedin_") ||
+                                            it.localpart.startsWith("telegram_") ||
+                                            it.localpart.startsWith("instagram_") ||
+                                            it.localpart.startsWith("discord_") ||
+                                            it.localpart.startsWith("signal_") ||
+                                            it.localpart.startsWith("slack_") ||
+                                            it.localpart.startsWith("googlechat_") ||
+                                            it.localpart.startsWith("imessage_") ||
+                                            it.localpart.startsWith("android_sms_")
+                                        }?.localpart ?: ""
+                                    }
+                                    
+                                    val prefix = when {
+                                        bridgeLocalpart.startsWith("whatsapp_")   -> "[WA] "
+                                        bridgeLocalpart.startsWith("linkedin_")   -> "[LI] "
+                                        bridgeLocalpart.startsWith("telegram_")   -> "[TG] "
+                                        bridgeLocalpart.startsWith("instagram_")  -> "[IG] "
+                                        bridgeLocalpart.startsWith("discord_")    -> "[DC] "
+                                        bridgeLocalpart.startsWith("signal_")     -> "[SG] "
+                                        bridgeLocalpart.startsWith("slack_")      -> "[SL] "
+                                        bridgeLocalpart.startsWith("googlechat_") -> "[GC] "
+                                        bridgeLocalpart.startsWith("imessage_")   -> "[iMsg] "
+                                        bridgeLocalpart.startsWith("android_sms_")-> "[SMS] "
+                                        else                                       -> ""
+                                    }
+                                    
+                                    val explicitName = room.name?.explicitName
+                                    val computedName = explicitName
+                                        ?: room.name?.heroes?.mapNotNull { heroId ->
+                                            client.user.getById(room.roomId, heroId).firstOrNull()?.name
+                                                ?: heroId.localpart
+                                        }?.joinToString(", ")?.takeIf { it.isNotBlank() }
+                                        ?: "Chat"
                                         
-                                        val prefix = when {
-                                            bridgeLocalpart.startsWith("whatsapp_")   -> "[WA] "
-                                            bridgeLocalpart.startsWith("linkedin_")   -> "[LI] "
-                                            bridgeLocalpart.startsWith("telegram_")   -> "[TG] "
-                                            bridgeLocalpart.startsWith("instagram_")  -> "[IG] "
-                                            bridgeLocalpart.startsWith("discord_")    -> "[DC] "
-                                            bridgeLocalpart.startsWith("signal_")     -> "[SG] "
-                                            bridgeLocalpart.startsWith("slack_")      -> "[SL] "
-                                            bridgeLocalpart.startsWith("googlechat_") -> "[GC] "
-                                            bridgeLocalpart.startsWith("imessage_")   -> "[iMsg] "
-                                            bridgeLocalpart.startsWith("android_sms_")-> "[SMS] "
-                                            else                                       -> ""
-                                        }
-                                        
-                                        val explicitName = room.name?.explicitName
-                                        val computedName = explicitName
-                                            ?: room.name?.heroes?.mapNotNull { heroId ->
-                                                client.user.getById(room.roomId, heroId).firstOrNull()?.name
-                                                    ?: heroId.localpart
-                                            }?.joinToString(", ")?.takeIf { it.isNotBlank() }
-                                            ?: "Chat"
-                                            
-                                        val finalName = prefix + computedName
+                                    val finalName = prefix + computedName
 
-                                        val startId = room.lastRelevantEventId
-                                        val cached = summaries[room.roomId.full]
-                                        if (startId == null) {
-                                            flowOf(RowUpdate(room, finalName, "", null))
-                                        } else if (cached?.lastEventId == startId.full &&
-                                            cached.lastMessage.isNotEmpty()
-                                        ) {
-                                            // The cached preview was built from this very event,
-                                            // so it still holds: skip the timeline walk.
-                                            flowOf(RowUpdate(room, finalName, cached.lastMessage, startId.full))
-                                        } else {
-                                            client.room.getTimelineEvent(room.roomId, startId) {
-                                                fetchTimeout = kotlin.time.Duration.ZERO
-                                            }
-                                                .map { startEvent ->
-                                                    // ── Fetch last message preview ──
-                                                    var currentEventId: net.folivo.trixnity.core.model.EventId? = startId
-                                                    var preview: String? = null
-                                                    var previewEventId: String? = null
-                                                    var attempts = 0
-                                                    
-                                                    while (currentEventId != null && preview == null && attempts < 20) {
-                                                        try {
-                                                            val timelineEvent = if (currentEventId == startId) startEvent
-                                                            else client.room
-                                                                .getTimelineEvent(room.roomId, currentEventId) {
-                                                                    // A preview is read from what is stored; never page the server for one.
-                                                                    fetchTimeout = kotlin.time.Duration.ZERO
-                                                                }
-                                                                .firstOrNull { it == null || it.content != null }
-                                                                
-                                                            val eventContent = timelineEvent?.content?.getOrNull()
-                                                            preview = contentPreview(eventContent)
-                                                            
-                                                            if (preview != null) {
-                                                                previewEventId = currentEventId?.full
-                                                                break
+                                    val startId = room.lastRelevantEventId
+                                    val cached = summaries[room.roomId.full]
+                                    if (startId == null) {
+                                        flowOf(RowUpdate(room, finalName, "", null))
+                                    } else if (cached?.lastEventId == startId.full &&
+                                        cached.lastMessage.isNotEmpty()
+                                    ) {
+                                        // The cached preview was built from this very event,
+                                        // so it still holds: skip the timeline walk.
+                                        flowOf(RowUpdate(room, finalName, cached.lastMessage, startId.full))
+                                    } else {
+                                        client.room.getTimelineEvent(room.roomId, startId) {
+                                            fetchTimeout = kotlin.time.Duration.ZERO
+                                        }
+                                            .map { startEvent ->
+                                                // ── Fetch last message preview ──
+                                                var currentEventId: net.folivo.trixnity.core.model.EventId? = startId
+                                                var preview: String? = null
+                                                var previewEventId: String? = null
+                                                var attempts = 0
+                                                
+                                                while (currentEventId != null && preview == null && attempts < 20) {
+                                                    try {
+                                                        val timelineEvent = if (currentEventId == startId) startEvent
+                                                        else client.room
+                                                            .getTimelineEvent(room.roomId, currentEventId) {
+                                                                // A preview is read from what is stored; never page the server for one.
+                                                                fetchTimeout = kotlin.time.Duration.ZERO
                                                             }
-                                                            currentEventId = timelineEvent?.previousEventId
-                                                        } catch (e: Exception) {
+                                                            .firstOrNull { it == null || it.content != null }
+                                                            
+                                                        val eventContent = timelineEvent?.content?.getOrNull()
+                                                        preview = contentPreview(eventContent)
+                                                        
+                                                        if (preview != null) {
+                                                            previewEventId = currentEventId?.full
                                                             break
                                                         }
-                                                        attempts++
+                                                        currentEventId = timelineEvent?.previousEventId
+                                                    } catch (e: Exception) {
+                                                        break
                                                     }
-                                                    RowUpdate(room, finalName, preview ?: "", previewEventId)
+                                                    attempts++
                                                 }
-                                        }
+                                                RowUpdate(room, finalName, preview ?: "", previewEventId)
+                                            }
                                     }
-                                }.collect { result ->
-                                    if (result != null) {
-                                        val (room, computedName, lastPreview, previewEventId) = result
-                                        // Update memory structures
-                                        if (lastPreview.isNotEmpty() || latestLastMessages[id] == null) {
-                                            latestLastMessages[id] = lastPreview
-                                            if (previewEventId != null) latestPreviewEventIds[id] = previewEventId
-                                        }
-                                        latestRooms[id]        = room
-                                        latestRoomNames[id]    = computedName
+                                }
+                            }.collect { result ->
+                                if (result != null) {
+                                    val (room, computedName, lastPreview, previewEventId) = result
+                                    // Update memory structures
+                                    if (lastPreview.isNotEmpty() || latestLastMessages[id] == null) {
+                                        latestLastMessages[id] = lastPreview
+                                        if (previewEventId != null) latestPreviewEventIds[id] = previewEventId
+                                    }
+                                    latestRooms[id]        = room
+                                    latestRoomNames[id]    = computedName
 
-                                        rebuildRooms()
-                                    }
+                                    rebuildRooms()
                                 }
                             }
                         }
@@ -453,6 +459,21 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                 }
             }
         }
+
+    /**
+     * An open chat sits on top of this list, and the list kept recomputing previews for
+     * every room the catch-up sync touched - hundreds of times a second, exactly when the
+     * chat was trying to read the same store. Collection pauses while the list is hidden
+     * and resumes when it returns; the cached rows stay on screen meanwhile.
+     */
+    override fun onScreenShow(screen: com.thelightphone.sdk.SimpleLightScreen<Unit>) {
+        val client = BeeperRepository.getClient() ?: return
+        if (collectionJob?.isActive != true) collectionJob = collectRooms(client)
+    }
+
+    override fun onScreenHide(screen: com.thelightphone.sdk.SimpleLightScreen<Unit>) {
+        collectionJob?.cancel()
+        collectionJob = null
     }
 
     fun logout() {
