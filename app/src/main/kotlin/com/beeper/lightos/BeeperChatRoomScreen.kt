@@ -56,6 +56,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.stateIn
@@ -562,6 +564,31 @@ data class ChatMessage(
 
 // ── ViewModel ──────────────────────────────────────────────────────────────────
 
+/**
+ * The messages each room showed last, for as long as the process lives.
+ *
+ * Trixnity's store already holds the events, so reopening a chat never went back to
+ * the server - but a new view model started from an empty list and resolved every
+ * message again (content, sender names, replies) ten at a time, which looks exactly
+ * like reloading the history. Seeding from here paints the chat at once.
+ */
+private object ChatRoomMemoryCache {
+    private const val ROOMS = 12
+
+    private val rooms = object : LinkedHashMap<String, List<ChatMessage>>(ROOMS, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<ChatMessage>>?) =
+            size > ROOMS
+    }
+
+    @Synchronized
+    fun get(roomId: String): List<ChatMessage> = rooms[roomId].orEmpty()
+
+    @Synchronized
+    fun put(roomId: String, messages: List<ChatMessage>) {
+        rooms[roomId] = messages
+    }
+}
+
 class BeeperChatRoomViewModel(
     private val client: MatrixClient,
     val roomId: String,
@@ -569,7 +596,7 @@ class BeeperChatRoomViewModel(
 
     private val matrixRoomId = RoomId(roomId)
 
-    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    private val _messages = MutableStateFlow(ChatRoomMemoryCache.get(roomId))
     private val _outboxMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = kotlinx.coroutines.flow.combine(_messages, _outboxMessages) { timelineMsgs, outboxMsgs ->
         val timelineTxIds = timelineMsgs.mapNotNull { it.transactionId }.toSet()
@@ -577,7 +604,15 @@ class BeeperChatRoomViewModel(
         timelineMsgs + filteredOutbox
     }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Lazily, emptyList())
 
-    private val _messageLimit = MutableStateFlow(10)
+    // Load at least as far back as the cached screen went, so the live timeline can
+    // take over without the chat suddenly getting shorter.
+    private val _messageLimit = MutableStateFlow(maxOf(10, _messages.value.size))
+
+    /** How many messages the live timeline has resolved - separate from what is shown. */
+    private val _liveCount = MutableStateFlow(0)
+
+    /** True once the live timeline has loaded as far back as it is going to for now. */
+    private val _liveSettled = MutableStateFlow(false)
     
     private val _canLoadMore = MutableStateFlow(false)
     val canLoadMore: StateFlow<Boolean> = _canLoadMore.asStateFlow()
@@ -585,6 +620,13 @@ class BeeperChatRoomViewModel(
     fun loadMore() {
         _messageLimit.value += 10
     }
+
+    /** Display names per user for this view model's lifetime; looked up once each. */
+    private val senderNames = java.util.concurrent.ConcurrentHashMap<net.folivo.trixnity.core.model.UserId, String>()
+
+    private suspend fun nameOf(userId: net.folivo.trixnity.core.model.UserId): String =
+        senderNames[userId] ?: (client.user.getById(matrixRoomId, userId).firstOrNull()?.name ?: userId.localpart)
+            .also { senderNames[userId] = it }
 
     private val _roomName = MutableStateFlow("Chat")
     val roomName: StateFlow<String> = _roomName.asStateFlow()
@@ -718,7 +760,7 @@ class BeeperChatRoomViewModel(
                                     val targetName = memberEvent.displayName 
                                         ?: prevContent?.displayName 
                                         ?: targetId.substringBefore(":")
-                                    val senderNameObj = client.user.getById(matrixRoomId, senderId).firstOrNull()?.name ?: senderId.localpart
+                                    val senderNameObj = nameOf(senderId)
 
                                     // sender == target: user acting on themselves (join/leave)
                                     // sender != target: admin acting on someone else (kick/ban/invite)
@@ -739,9 +781,7 @@ class BeeperChatRoomViewModel(
                                 }
                                 // Redacted (deleted) message — show as system message
                                 event.content is net.folivo.trixnity.core.model.events.RedactedEventContent -> {
-                                    val redactorName = client.user
-                                        .getById(matrixRoomId, senderId)
-                                        .firstOrNull()?.name ?: senderId.localpart
+                                    val redactorName = nameOf(senderId)
                                     Triple("$redactorName deleted this message", null, true)
                                 }
                                 // State events, redactions, etc. — skip
@@ -751,9 +791,7 @@ class BeeperChatRoomViewModel(
                                 }
                             }
 
-                            val senderName = client.user
-                                .getById(matrixRoomId, senderId)
-                                .firstOrNull()?.name ?: senderId.localpart
+                            val senderName = nameOf(senderId)
 
                             // originTimestamp is Long (ms since epoch) on ClientEvent.RoomEvent
                             val ts: Long = try {
@@ -768,7 +806,7 @@ class BeeperChatRoomViewModel(
                                 resolveContent(it, isReply = isRep)?.first 
                             }
                             val replySenderName = replyEvent?.event?.sender?.let { sId ->
-                                client.user.getById(matrixRoomId, sId).firstOrNull()?.name ?: sId.localpart
+                                nameOf(sId)
                             }
 
                             val txId = event.unsigned?.transactionId
@@ -788,7 +826,7 @@ class BeeperChatRoomViewModel(
                                 isSystemMessage = isSystemMessage,
                             )
                         }
-                }
+                }.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
             }
 
             val lastEventId = room.lastEventId ?: return@launch
@@ -796,16 +834,17 @@ class BeeperChatRoomViewModel(
 
             // Keep loading newer events, and load history if we don't have enough
             viewModelScope.launch {
-                combine(timeline.state, _messages, _messageLimit) { state, msgs, limit ->
-                    Triple(state, msgs, limit)
-                }.collect { (state, msgs, limit) ->
+                combine(timeline.state, _liveCount, _messageLimit) { state, count, limit ->
+                    Triple(state, count, limit)
+                }.collect { (state, count, limit) ->
                     if (state.canLoadAfter && !state.isLoadingAfter) {
                         timeline.loadAfter()
                     }
-                    if (state.canLoadBefore && !state.isLoadingBefore && msgs.size < limit) {
+                    if (state.canLoadBefore && !state.isLoadingBefore && count < limit) {
                         timeline.loadBefore()
                     }
-                    _canLoadMore.value = state.canLoadBefore || msgs.size >= limit
+                    _canLoadMore.value = state.canLoadBefore || count >= limit
+                    _liveSettled.value = !state.canLoadBefore || count >= limit
                 }
             }
 
@@ -831,11 +870,19 @@ class BeeperChatRoomViewModel(
                     }
                 }
 
-            combine(timeline.state, _messageLimit) { state, limit -> Pair(state, limit) }
-                .flatMapLatest { (state, limit) ->
-                    val flows = state.elements
+            // Resubscribe only when the set of elements changes. timeline.state also emits
+            // for every loading toggle, and each of those used to rebuild every message.
+            timeline.state.map { it.elements }.distinctUntilChanged()
+                .flatMapLatest { flows ->
                     if (flows.isEmpty()) flowOf(emptyList())
-                    else combine(flows) { it.toList().filterNotNull().takeLast(limit) }
+                    else combine(flows) { it.toList().filterNotNull() }
+                }
+                // 4. Count what is visible before trimming, so the loader stops once there
+                //    is enough; counting after deduplication kept it loading in chats full
+                //    of repeated bridge notices.
+                .combine(_messageLimit) { all, limit ->
+                    _liveCount.value = all.size
+                    all.takeLast(limit)
                 }
                 .combine(latestReadEventIdFlow) { resolved, latestReadId ->
                     if (latestReadId != null) {
@@ -847,7 +894,8 @@ class BeeperChatRoomViewModel(
                         } else resolved
                     } else resolved
                 }
-                .collect { resolved ->
+                .combine(_liveSettled) { resolved, settled -> resolved to settled }
+                .collect { (resolved, settled) ->
                     val deduped = mutableListOf<ChatMessage>()
                     for (msg in resolved) {
                         if (msg.isSystemMessage && !msg.content.endsWith("deleted this message")) {
@@ -859,7 +907,13 @@ class BeeperChatRoomViewModel(
                         }
                         deduped.add(msg)
                     }
-                    _messages.value = deduped
+                    // Keep the cached screen until the live timeline has caught up,
+                    // rather than flashing back to its first few messages.
+                    val shown = _messages.value
+                    if (settled || shown.isEmpty() || deduped.size >= shown.size) {
+                        _messages.value = deduped
+                        ChatRoomMemoryCache.put(roomId, deduped)
+                    }
                 }
         }
     }
