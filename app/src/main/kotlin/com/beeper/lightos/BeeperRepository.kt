@@ -47,7 +47,25 @@ object BeeperRepository {
     @Volatile private var _accessToken: String? = null
     fun getAccessToken(): String? = _accessToken
 
+    /**
+     * Trixnity's default sync filter is empty, so every catch-up carried the full member
+     * list of every room that changed - and bridged WhatsApp groups have long ones. Members
+     * are loaded lazily instead: the server sends only those an event needs.
+     */
+    private val lazyMembersFilter = net.folivo.trixnity.clientserverapi.model.users.Filters(
+        room = net.folivo.trixnity.clientserverapi.model.users.Filters.RoomFilter(
+            state = net.folivo.trixnity.clientserverapi.model.users.Filters.RoomFilter.RoomEventFilter(
+                lazyLoadMembers = true,
+            ),
+            timeline = net.folivo.trixnity.clientserverapi.model.users.Filters.RoomFilter.RoomEventFilter(
+                lazyLoadMembers = true,
+            ),
+        ),
+    )
+
     private val matrixClientConfiguration: net.folivo.trixnity.client.MatrixClientConfiguration.() -> Unit = {
+        syncFilter = lazyMembersFilter
+        syncOnceFilter = lazyMembersFilter
         android.util.Log.d("BeeperInterceptor", "Setting up MatrixClientConfiguration!")
         httpClientEngine = io.ktor.client.engine.okhttp.OkHttp.create {
             addInterceptor(okhttp3.Interceptor { chain ->
