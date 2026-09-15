@@ -445,13 +445,25 @@ class BeeperCameraScreen(
                                     .fillMaxWidth(),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                s.preview?.let {
-                                    Image(
-                                        bitmap = it.asImageBitmap(),
-                                        contentDescription = "Recorded video",
-                                        contentScale = ContentScale.Fit,
-                                        modifier = Modifier.fillMaxSize(),
+                                // Play the clip itself, looping, so you see what you are about to
+                                // send; the first frame only stands in if playback fails.
+                                var playbackFailed by remember(s.file) { mutableStateOf(false) }
+                                if (!playbackFailed) {
+                                    LocalVideoPlayer(
+                                        file = s.file,
+                                        loop = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        onError = { playbackFailed = true },
                                     )
+                                } else {
+                                    s.preview?.let {
+                                        Image(
+                                            bitmap = it.asImageBitmap(),
+                                            contentDescription = "Recorded video",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = Modifier.fillMaxSize(),
+                                        )
+                                    }
                                 }
                             }
                             LightText(

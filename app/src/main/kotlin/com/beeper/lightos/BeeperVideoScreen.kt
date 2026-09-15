@@ -41,12 +41,14 @@ import kotlinx.coroutines.withContext
 import net.folivo.trixnity.client.media
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
 
+private const val TAG = "BeeperVideo"
+
 /**
  * Plays a video message full screen.
  *
  * The chat only ever drew a thumbnail with a play icon on it; nothing played. The
  * file is downloaded once into the cache (decrypted when the room is encrypted)
- * and handed to MediaPlayer on a TextureView. Tap the picture to pause or resume.
+ * and handed to [LocalVideoPlayer].
  */
 class BeeperVideoScreen(
     sealedActivity: SealedLightActivity,
@@ -63,22 +65,9 @@ class BeeperVideoScreen(
     override fun Content() {
         val themeColors by LightThemeController.colors.collectAsState()
         var load by remember { mutableStateOf<Load>(Load.Downloading) }
-        var videoAspect by remember { mutableStateOf<Float?>(null) }
-        var isPlaying by remember { mutableStateOf(false) }
-        val player = remember { MediaPlayer() }
 
         LaunchedEffect(video) {
             load = download()
-        }
-
-        DisposableEffect(Unit) {
-            onDispose {
-                try {
-                    if (player.isPlaying) player.stop()
-                } catch (_: IllegalStateException) {
-                }
-                player.release()
-            }
         }
 
         LightTheme(colors = themeColors) {
@@ -107,42 +96,12 @@ class BeeperVideoScreen(
                             variant = LightTextVariant.Copy,
                             modifier = Modifier.padding(1f.gridUnitsAsDp()),
                         )
-                        is Load.Ready -> AndroidView(
-                            factory = { viewContext ->
-                                TextureView(viewContext).apply {
-                                    surfaceTextureListener = playerListener(
-                                        player = player,
-                                        file = state.file,
-                                        onSize = { w, h -> if (w > 0 && h > 0) videoAspect = w.toFloat() / h },
-                                        onPlaying = { isPlaying = it },
-                                        onError = { load = Load.Failed("Could not play this video.") },
-                                    )
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .let { m -> videoAspect?.let { m.aspectRatio(it) } ?: m }
-                                .lightClickable {
-                                    try {
-                                        if (player.isPlaying) player.pause() else player.start()
-                                        isPlaying = player.isPlaying
-                                    } catch (e: IllegalStateException) {
-                                        Log.w(TAG, "Tap before the player was ready", e)
-                                    }
-                                },
+                        is Load.Ready -> LocalVideoPlayer(
+                            file = state.file,
+                            modifier = Modifier.fillMaxWidth(),
+                            onError = { load = Load.Failed("Could not play this video.") },
                         )
                     }
-                }
-
-                if (load is Load.Ready) {
-                    LightText(
-                        text = if (isPlaying) "Tap to pause" else "Tap to play",
-                        variant = LightTextVariant.Fine,
-                        lighten = true,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(vertical = 1f.gridUnitsAsDp()),
-                    )
                 }
             }
         }
@@ -174,42 +133,101 @@ class BeeperVideoScreen(
             Load.Failed("Could not download this video.")
         }
     }
+}
 
-    private fun playerListener(
-        player: MediaPlayer,
-        file: java.io.File,
-        onSize: (Int, Int) -> Unit,
-        onPlaying: (Boolean) -> Unit,
-        onError: () -> Unit,
-    ) = object : TextureView.SurfaceTextureListener {
-        override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+/**
+ * A video file on disk, played through MediaPlayer on a TextureView at its own
+ * aspect ratio. Tap the picture to pause or resume. Used for received videos and
+ * for reviewing a recording before it is sent.
+ */
+@Composable
+fun LocalVideoPlayer(
+    file: java.io.File,
+    modifier: Modifier = Modifier,
+    loop: Boolean = false,
+    onError: () -> Unit = {},
+) {
+    var videoAspect by remember(file) { mutableStateOf<Float?>(null) }
+    var isPlaying by remember(file) { mutableStateOf(false) }
+    val player = remember(file) { MediaPlayer() }
+
+    DisposableEffect(player) {
+        onDispose {
             try {
-                player.setSurface(Surface(texture))
-                player.setDataSource(file.absolutePath)
-                player.setOnVideoSizeChangedListener { _, w, h -> onSize(w, h) }
-                player.setOnPreparedListener {
-                    it.start()
-                    onPlaying(true)
-                }
-                player.setOnCompletionListener { onPlaying(false) }
-                player.setOnErrorListener { _, what, extra ->
-                    Log.e(TAG, "MediaPlayer error what=$what extra=$extra")
-                    onError()
-                    true
-                }
-                player.prepareAsync()
-            } catch (e: Exception) {
-                Log.e(TAG, "Could not start playback", e)
-                onError()
+                if (player.isPlaying) player.stop()
+            } catch (_: IllegalStateException) {
             }
+            player.release()
         }
-
-        override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
-        override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean = true
-        override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
     }
 
-    private companion object {
-        const val TAG = "BeeperVideo"
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        AndroidView(
+            factory = { viewContext ->
+                TextureView(viewContext).apply {
+                    surfaceTextureListener = playerListener(
+                        player = player,
+                        file = file,
+                        loop = loop,
+                        onSize = { w, h -> if (w > 0 && h > 0) videoAspect = w.toFloat() / h },
+                        onPlaying = { isPlaying = it },
+                        onError = onError,
+                    )
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .let { m -> videoAspect?.let { m.aspectRatio(it) } ?: m }
+                .lightClickable {
+                    try {
+                        if (player.isPlaying) player.pause() else player.start()
+                        isPlaying = player.isPlaying
+                    } catch (e: IllegalStateException) {
+                        Log.w(TAG, "Tap before the player was ready", e)
+                    }
+                },
+        )
+        LightText(
+            text = if (isPlaying) "Tap to pause" else "Tap to play",
+            variant = LightTextVariant.Fine,
+            lighten = true,
+            modifier = Modifier.padding(top = 0.5f.gridUnitsAsDp()),
+        )
     }
+}
+
+private fun playerListener(
+    player: MediaPlayer,
+    file: java.io.File,
+    loop: Boolean,
+    onSize: (Int, Int) -> Unit,
+    onPlaying: (Boolean) -> Unit,
+    onError: () -> Unit,
+) = object : TextureView.SurfaceTextureListener {
+    override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+        try {
+            player.setSurface(Surface(texture))
+            player.setDataSource(file.absolutePath)
+            player.isLooping = loop
+            player.setOnVideoSizeChangedListener { _, w, h -> onSize(w, h) }
+            player.setOnPreparedListener {
+                it.start()
+                onPlaying(true)
+            }
+            player.setOnCompletionListener { onPlaying(false) }
+            player.setOnErrorListener { _, what, extra ->
+                Log.e(TAG, "MediaPlayer error what=$what extra=$extra")
+                onError()
+                true
+            }
+            player.prepareAsync()
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not start playback", e)
+            onError()
+        }
+    }
+
+    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
+    override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean = true
+    override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
 }
