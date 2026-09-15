@@ -64,6 +64,15 @@ data class RoomSummary(
     val lastEventId: String? = null,
 )
 
+/** One room's row as it comes out of the per-room flow. */
+private data class RowUpdate(
+    val room: net.folivo.trixnity.client.store.Room,
+    val name: String,
+    val preview: String,
+    /** Event the preview was read from; older than the room's newest when the walk fell back. */
+    val previewEventId: String?,
+)
+
 /** Format a millisecond timestamp for display in the chat list. */
 private fun formatRoomTimestamp(timestamp: Long): String {
     if (timestamp <= 0L) return ""
@@ -212,6 +221,8 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
     private val latestRoomNames    = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val latestLastMessages = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val latestFavorites    = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    /** The event each preview was actually built from - not necessarily the room's newest. */
+    private val latestPreviewEventIds = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /** Finished rows, seeded from disk so the list is filled before sync catches up. */
     private val summaries = java.util.concurrent.ConcurrentHashMap<String, RoomSummary>()
@@ -238,7 +249,7 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                     lastTimestamp = r.lastRelevantEventTimestamp
                         ?.toEpochMilliseconds() ?: 0L,
                     isFavorite    = latestFavorites[id] ?: previous?.isFavorite ?: false,
-                    lastEventId   = r.lastRelevantEventId?.full ?: previous?.lastEventId,
+                    lastEventId   = latestPreviewEventIds[id] ?: previous?.lastEventId,
                 )
             }
 
@@ -302,6 +313,7 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                             latestRoomNames.remove(entry.key)
                             latestLastMessages.remove(entry.key)
                             latestFavorites.remove(entry.key)
+                            latestPreviewEventIds.remove(entry.key)
                             summaries.remove(entry.key)
                             it.remove()
                         }
@@ -376,19 +388,20 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                         val startId = room.lastRelevantEventId
                                         val cached = summaries[room.roomId.full]
                                         if (startId == null) {
-                                            flowOf(Triple(room, finalName, ""))
+                                            flowOf(RowUpdate(room, finalName, "", null))
                                         } else if (cached?.lastEventId == startId.full &&
                                             cached.lastMessage.isNotEmpty()
                                         ) {
-                                            // Same last event as the cached row, so the stored
-                                            // preview still holds: skip the timeline walk.
-                                            flowOf(Triple(room, finalName, cached.lastMessage))
+                                            // The cached preview was built from this very event,
+                                            // so it still holds: skip the timeline walk.
+                                            flowOf(RowUpdate(room, finalName, cached.lastMessage, startId.full))
                                         } else {
                                             client.room.getTimelineEvent(room.roomId, startId)
                                                 .map { startEvent ->
                                                     // ── Fetch last message preview ──
                                                     var currentEventId: net.folivo.trixnity.core.model.EventId? = startId
                                                     var preview: String? = null
+                                                    var previewEventId: String? = null
                                                     var attempts = 0
                                                     
                                                     while (currentEventId != null && preview == null && attempts < 20) {
@@ -401,23 +414,27 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                                             val eventContent = timelineEvent?.content?.getOrNull()
                                                             preview = contentPreview(eventContent)
                                                             
-                                                            if (preview != null) break
+                                                            if (preview != null) {
+                                                                previewEventId = currentEventId?.full
+                                                                break
+                                                            }
                                                             currentEventId = timelineEvent?.previousEventId
                                                         } catch (e: Exception) {
                                                             break
                                                         }
                                                         attempts++
                                                     }
-                                                    Triple(room, finalName, preview ?: "")
+                                                    RowUpdate(room, finalName, preview ?: "", previewEventId)
                                                 }
                                         }
                                     }
                                 }.collect { result ->
                                     if (result != null) {
-                                        val (room, computedName, lastPreview) = result
+                                        val (room, computedName, lastPreview, previewEventId) = result
                                         // Update memory structures
                                         if (lastPreview.isNotEmpty() || latestLastMessages[id] == null) {
                                             latestLastMessages[id] = lastPreview
+                                            if (previewEventId != null) latestPreviewEventIds[id] = previewEventId
                                         }
                                         latestRooms[id]        = room
                                         latestRoomNames[id]    = computedName

@@ -13,7 +13,9 @@ import kotlinx.serialization.json.Json
  */
 object BeeperChatListCache {
     private const val TAG = "BeeperChatListCache"
-    private const val KEY = "chat_list_v1"
+    // v1 rows could pair a room's newest event id with a preview read from an older
+    // message, which the reopen shortcut then trusted indefinitely. Start over.
+    private const val KEY = "chat_list_v2"
     private const val MAX_ENTRIES = 40
 
     private val json = Json { ignoreUnknownKeys = true }
