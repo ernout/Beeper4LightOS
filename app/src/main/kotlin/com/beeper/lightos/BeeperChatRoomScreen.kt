@@ -698,7 +698,10 @@ class BeeperChatRoomViewModel(
                     val contentCast = timelineEvent.content?.getOrNull() as? MessageEventContent
                     val replyToId = contentCast?.relatesTo?.replyTo?.eventId
                     val replyFlow = if (replyToId != null) {
-                        client.room.getTimelineEvent(matrixRoomId, replyToId)
+                        client.room.getTimelineEvent(matrixRoomId, replyToId) {
+                            // A months-old reply target is not worth paging the server for.
+                            fetchTimeout = kotlin.time.Duration.ZERO
+                        }
                     } else {
                         flowOf(null)
                     }

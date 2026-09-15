@@ -396,7 +396,9 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                             // so it still holds: skip the timeline walk.
                                             flowOf(RowUpdate(room, finalName, cached.lastMessage, startId.full))
                                         } else {
-                                            client.room.getTimelineEvent(room.roomId, startId)
+                                            client.room.getTimelineEvent(room.roomId, startId) {
+                                                fetchTimeout = kotlin.time.Duration.ZERO
+                                            }
                                                 .map { startEvent ->
                                                     // ── Fetch last message preview ──
                                                     var currentEventId: net.folivo.trixnity.core.model.EventId? = startId
@@ -408,7 +410,10 @@ class BeeperChatListViewModel : LightViewModel<Unit>() {
                                                         try {
                                                             val timelineEvent = if (currentEventId == startId) startEvent
                                                             else client.room
-                                                                .getTimelineEvent(room.roomId, currentEventId)
+                                                                .getTimelineEvent(room.roomId, currentEventId) {
+                                                                    // A preview is read from what is stored; never page the server for one.
+                                                                    fetchTimeout = kotlin.time.Duration.ZERO
+                                                                }
                                                                 .firstOrNull { it == null || it.content != null }
                                                                 
                                                             val eventContent = timelineEvent?.content?.getOrNull()

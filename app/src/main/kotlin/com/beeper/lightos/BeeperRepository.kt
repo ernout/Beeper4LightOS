@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -171,6 +172,9 @@ object BeeperRepository {
                 // Announce the restored session first: the chat list can render from the
                 // store (and from its own cache) while the first sync is still in flight.
                 _isLoggedIn.value = true
+                // If the background job is mid catch-up, let it finish: the loop then
+                // only fetches what arrived since, instead of the whole backlog again.
+                catchUpLock.withLock { }
                 client.startSync()
 
                 pendingPushEndpoint?.let { endpoint ->
@@ -201,11 +205,26 @@ object BeeperRepository {
         }
     }
 
+    /**
+     * One catch-up at a time. The periodic job fires as the process starts, often a
+     * moment before the app's own sync loop, and both used to process the same
+     * backlog side by side - which is also when an opened chat waits for the store.
+     */
+    private val catchUpLock = kotlinx.coroutines.sync.Mutex()
+
     suspend fun syncOnce(context: android.content.Context) {
         println("Beeper background sync started")
         val client = getOrInitMatrixClient(context)
         if (client != null) {
-            client.syncOnce()
+            val loop = client.syncState.value
+            if (loop == net.folivo.trixnity.clientserverapi.client.SyncState.STARTED ||
+                loop == net.folivo.trixnity.clientserverapi.client.SyncState.INITIAL_SYNC ||
+                loop == net.folivo.trixnity.clientserverapi.client.SyncState.RUNNING
+            ) {
+                println("Beeper background sync skipped: the sync loop is $loop")
+                return
+            }
+            catchUpLock.withLock { client.syncOnce() }
             println("Beeper background sync finished")
         } else {
             println("Beeper background sync failed: no client")
